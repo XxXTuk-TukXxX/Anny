@@ -1,0 +1,92 @@
+[
+    {
+      "quote": "Do you picture it as an untouched, green wilderness with a small scattered population of primitive people, or with no people at all?",
+      "explanation": "Defines the myth explicitly: imagines North America as empty and unused.",
+      "color": "#FFD54F"
+    },
+    {
+      "quote": "Their Christian Bible has a line in it that seemed to shape how they went into that wilderness: ",
+      "explanation": "Shows a religious rationale that framed seizure of land as divinely authorized.",
+      "color": "#FFD54F"
+    },
+    {
+      "quote": "The Doctrine of Discovery, which was ingrained in the mind-set of European colonizers, assured Christians that whatever land they saw was theirs to occupy and use.",
+      "explanation": "Names the legal–theological doctrine that converted 'discovery' into ownership.",
+      "color": "#FFD54F"
+    },
+    {
+      "quote": "In their eyes the land was an unoccupied, pristine wilderness.",
+      "explanation": "Summarizes the colonizers’ perception that erases Indigenous presence and stewardship.",
+      "color": "#FFD54F"
+    },
+    {
+      "quote": "Those images do not reflect the presence of roads, cities, towns, villages, and trading networks...",
+      "explanation": "Direct rebuttal: complex infrastructure existed across the continent.",
+      "color": "#81D4FA"
+    },
+    {
+      "quote": "Native peoples had created town sites, farms, monumental earthworks, and networks of roads, and they had devised a wide variety of governments, some as complex as any in the modern world.",
+      "explanation": "Evidence of urbanism, engineering, and governance contradicts 'empty wilderness.'",
+      "color": "#81D4FA"
+    },
+    {
+      "quote": "Before the arrival of Europeans, North America was indeed a ",
+      "explanation": "Reframes the land as densely peopled and politically organized.",
+      "color": "#81D4FA"
+    },
+    {
+      "quote": "If North America had actually been an undeveloped wilderness, the European settlers could not have survived.",
+      "explanation": "Logical refutation: colonial survival depended on existing Indigenous systems.",
+      "color": "#81D4FA"
+    },
+    {
+      "quote": "They learned to grow plants Indigenous peoples had domesticated, such as corn, squash, and tobacco. They relied on local Indigenous people to help them find necessities such as water and medicinal herbs.",
+      "explanation": "Concrete knowledge transfer that sustained settlers; disproves self-reliant origin story.",
+      "color": "#81D4FA"
+    },
+    {
+      "quote": "The colonizers also stole farmland ... took control of the deer parks ... traveled on overland and water routes the Indigenous peoples made ... used those routes to move their armies...",
+      "explanation": "Shows dispossession of actively managed landscapes and appropriation of infrastructure.",
+      "color": "#81D4FA"
+    },
+    {
+      "quote": "They did not settle a virgin land. They invaded and displaced a resident population.",
+      "explanation": "Historian Francis Jennings’ verdict that replaces mythic language with accurate terms.",
+      "color": "#81D4FA"
+    },
+    {
+        "quote": "Notice that the man on the official seal of the Massachusetts Bay Colony is shown wearing only a bunch of leaves.",
+        "explanation": "Example of state imagery portraying Indigenous people as primitive to justify rule.",
+        "color": "#FFD54F"
+    },
+    {
+        "quote": "From their first contact ... non-Indigenous image makers have created images of Indigenous people that show them with very little clothing.",
+        "explanation": "Identifies a long pattern of outsider depictions crafting a biased visual narrative.",
+        "color": "#FFD54F"
+    },
+    {
+        "quote": "At times, these depictions defy logic: showing people nearly naked in the dead of winter ... or more animallike than human.",
+        "explanation": "Reveals the dehumanizing and ahistorical nature of the imagery.",
+        "color": "#FFD54F"
+    },
+    {
+        "quote": "In contrast, Europeans in North America are generally shown as being fully clothed...",
+        "explanation": "Visual contrast codes Europeans as ",
+        "color": "#FFD54F"
+    },
+    {
+        "quote": "Most images focus on clothing, tools, weapons, and homes ... but there are not-visible aspects that are more important.",
+        "explanation": "Critiques superficial portrayals that erase governance, law, and institutions.",
+        "color": "#81D4FA"
+    },
+    {
+        "quote": "Indigenous peoples were citizens of self-governing nations.",
+        "explanation": "Restores political reality: sovereignty and citizenship contradict ",
+        "color": "#81D4FA"
+    },
+    {
+        "quote": "What are some ways the images ... made by non-Indigenous people might affect your ability to see, know, and understand Indigenous peoples?",
+        "explanation": "Meta-prompt to recognize how propaganda shapes perception and sustains the myth.",
+        "color": "#81D4FA"
+    }
+]
