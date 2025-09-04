@@ -1,4 +1,6 @@
-# preview_tk.py
+# preview_tk.py  (Option B: true-to-PDF preview)
+import os
+import tempfile
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
@@ -11,21 +13,34 @@ import highlights  # your highlights.py
 # --- tweakables ---
 SCALE = 1.5                 # raster zoom factor
 OUT_PDF = "Myth_annotated_preview.pdf"
-SHOW_HIGHLIGHTS = True      # draw colored highlight previews on the page image
-HIGHLIGHT_STIPPLE = "gray25"  # simulates transparency; set to None to disable fill
+AUTO_REFRESH_AFTER_DRAG = True   # rebuild the exact preview after each drag
+
+# Use the SAME settings for plan-only, preview render, and export:
+DEFAULT_ANNOTATION_SETTINGS = dict(
+    note_width=240,
+    min_note_width=48,
+    note_fontsize=9.0,
+    note_fill=None, note_border=None, note_border_width=0,
+    note_text="red", draw_leader=False, leader_color=None,
+    allow_column_footer=True,
+    column_footer_max_offset=250,
+    max_vertical_offset=90,
+    max_scan=420,
+    side="outer",
+    allow_center_gutter=True,
+    center_gutter_tolerance=48.0,
+    dedupe_scope="page",
+    note_fontname="PatrickHand",
+    note_fontfile=r".\fonts\PatrickHand-Regular.ttf",
+)
 
 def _tk_color(c: Optional[str], default: str = "#ff9800") -> str:
-    """
-    Accepts hex ('#RRGGBB') or common names ('yellow', 'red'...).
-    Returns a Tk-compatible color string.
-    """
     if not c:
         return default
     s = c.strip()
     if s.startswith("#") and (len(s) == 7):
         return s
-    # allow simple names; Tk understands basic ones
-    return s
+    return s  # allow Tk named colors
 
 def _build_color_map(annotations_json: str, fallback: str = "#ff9800") -> Dict[str, str]:
     p = Path(annotations_json)
@@ -43,103 +58,107 @@ def _build_color_map(annotations_json: str, fallback: str = "#ff9800") -> Dict[s
         cmap[q] = _tk_color(row.get("color"), fallback)
     return cmap
 
-def _fitz_flags(fitz):
-    # mirror your highlighter flags for better search match
-    ci = getattr(fitz, "TEXT_IGNORECASE", None) or getattr(fitz, "TEXT_IGNORE_CASE", 0)
-    dehy = getattr(fitz, "TEXT_DEHYPHENATE", 0)
-    flags = 0
-    if ci: flags |= ci
-    if dehy: flags |= dehy
-    return flags
-
 class PDFPreviewApp:
     def __init__(self, master, pdf_path: str, annotations_json: str):
         self.master = master
-        self.master.title("PDF Notes Preview (drag boxes, then Export PDF)")
+        self.master.title("PDF Notes Preview (EXACT) — drag boxes, Refresh, Export")
         self.pdf_path = pdf_path
         self.annotations_json = annotations_json
+        self.settings = dict(DEFAULT_ANNOTATION_SETTINGS)  # one source of truth
 
-        # colors per quote (same logic as your annotator)
+        # colors per quote
         self.color_map = _build_color_map(self.annotations_json, fallback="#ff9800")
 
-        # Run plan-only to collect placements (UIDs, rects, etc.)
-        (out, hits, notes, skipped, placements) = highlights.highlight_and_margin_comment_pdf(
+        # ---- PLAN: compute placements (no drawing)
+        (_, hits, notes, skipped, placements) = highlights.highlight_and_margin_comment_pdf(
             pdf_path=self.pdf_path,
             queries=[], comments={},
             annotations_json=self.annotations_json,
-            plan_only=True,                 # compute only, don't draw/save
-            # keep the same layout knobs you’ll use for final rendering
-            note_width=240,
-            min_note_width=48,
-            note_fontsize=9.0,
-            note_fill=None, note_border=None, note_border_width=0,
-            note_text="red", draw_leader=False, leader_color=None,
-            allow_column_footer=True,
-            column_footer_max_offset=250,
-            max_vertical_offset=90,
-            max_scan=420,
-            side="outer",
-            allow_center_gutter=True,
-            center_gutter_tolerance=48.0,
-            dedupe_scope="page",
-            note_fontname="PatrickHand",
-            note_fontfile=r".\fonts\PatrickHand-Regular.ttf",
+            plan_only=True,
+            **self.settings
         )
-
-        # organize placements by page
-        self.placements_by_page: Dict[int, List] = {}
-        for p in placements:
-            self.placements_by_page.setdefault(p.page_index, []).append(p)
-
-        # keep the PDF open for search/highlight previews and raster
-        fitz = highlights._import_fitz()
-        self.fitz = fitz
-        self.flags = _fitz_flags(fitz)
-        self.doc = fitz.open(self.pdf_path)
-
-        # pre-render page images
-        self.page_imgs_ppm: Dict[int, bytes] = {}
-        self.page_sizes: Dict[int, Tuple[int, int]] = {}
-        self._rasterize_pages()
-
-        # --- layout: top toolbar + scrollable canvas area ---
-        self._build_ui()
-
-        # state
-        self.page_count = len(self.page_imgs_ppm)
+        self.placements: List = placements
+        self.page_count = None
         self.cur_page = 0
         self.overrides: Dict[str, Tuple[float, float, float, float]] = {}  # uid -> rect in PDF units
+        self._preview_pdf_path: Optional[str] = None
 
-        # input bindings
-        self.canvas.bind("<Button-1>", self.on_down)
-        self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_up)
+        # PyMuPDF (from your helper)
+        self.fitz = highlights._import_fitz()
+        self.doc = None
+        self.page_imgs_ppm: Dict[int, bytes] = {}
+        self.page_sizes: Dict[int, Tuple[int, int]] = {}
 
-        # scrolling (Windows/macOS)
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-        # scrolling (Linux)
-        self.canvas.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-2, "units"))
-        self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll( 2, "units"))
+        # UI
+        self._build_ui()
 
-        self.drag_uid = None
-        self.drag_dx = 0
-        self.drag_dy = 0
+        # Build the first exact preview from the planned rectangles
+        self._build_exact_preview_pdf()
+        self._draw_page()
 
-        self.draw_page()
+        messagebox.showinfo("Preview ready",
+                            f"Found {hits} highlights, {notes} notes (skipped {skipped}).")
 
+    # ---------- helpers ----------
+    def _planned_rect_map(self) -> Dict[str, Tuple[float,float,float,float]]:
+        # uid -> planned rect from plan-only phase
+        return {p.uid: p.note_rect for p in self.placements}
+
+    def _build_exact_preview_pdf(self):
+        """Render a temporary annotated PDF that exactly matches export."""
+        # combine plan-only rectangles with any dragged overrides
+        planned = self._planned_rect_map()
+        combined = {**planned, **self.overrides}
+
+        # make a temp file path
+        fd, tmp = tempfile.mkstemp(suffix="_annot_preview.pdf")
+        os.close(fd)
+        self._preview_pdf_path = tmp
+
+        # draw using the real engine (identical code path to export)
+        highlights.highlight_and_margin_comment_pdf(
+            pdf_path=self.pdf_path,
+            queries=[], comments={},
+            annotations_json=self.annotations_json,
+            out_path=tmp,
+            fixed_note_rects=combined,
+            **self.settings
+        )
+
+        # open and rasterize
+        if self.doc is not None:
+            try:
+                self.doc.close()
+            except Exception:
+                pass
+        self.doc = self.fitz.open(tmp)
+        self._rasterize_pages()
+        self.page_count = len(self.page_imgs_ppm)
+        self.cur_page = max(0, min(self.cur_page, self.page_count - 1))
+
+    def _rasterize_pages(self):
+        self.page_imgs_ppm.clear()
+        self.page_sizes.clear()
+        mat = self.fitz.Matrix(SCALE, SCALE)
+        for i, page in enumerate(self.doc):
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            self.page_imgs_ppm[i] = pix.tobytes("ppm")
+            self.page_sizes[i] = (pix.width, pix.height)
+
+    # ---------- UI ----------
     def _build_ui(self):
-        # Toolbar at the TOP so it's always visible
+        # Toolbar at the top
         toolbar = ttk.Frame(self.master)
         toolbar.pack(side="top", fill="x")
 
         ttk.Button(toolbar, text="◀ Prev", command=self.prev_page).pack(side="left", padx=4, pady=4)
         ttk.Button(toolbar, text="Next ▶", command=self.next_page).pack(side="left", padx=4, pady=4)
-        ttk.Button(toolbar, text="Export PDF", command=self.export_pdf).pack(side="right", padx=4, pady=4)
+        ttk.Button(toolbar, text="Refresh preview", command=self._refresh_preview).pack(side="left", padx=12, pady=4)
+        ttk.Button(toolbar, text="Export PDF", command=self.export_pdf).pack(side="right", padx=8, pady=4)
 
         # Scrollable canvas area below toolbar
         outer = ttk.Frame(self.master)
         outer.pack(side="top", fill="both", expand=True)
-
         outer.grid_rowconfigure(0, weight=1)
         outer.grid_columnconfigure(0, weight=1)
 
@@ -152,60 +171,64 @@ class PDFPreviewApp:
         self.vsb.grid(row=0, column=1, sticky="ns")
         self.hsb.grid(row=1, column=0, sticky="ew")
 
-    def _on_mousewheel(self, event):
-        # Windows/mac delta is usually +/-120 per tick
-        delta = int(-1 * (event.delta / 120))
-        self.canvas.yview_scroll(delta, "units")
+        # input bindings for dragging overlays
+        self.canvas.bind("<Button-1>", self.on_down)
+        self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_up)
+        # scrolling
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-2, "units"))
+        self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll( 2, "units"))
 
-    def _rasterize_pages(self):
-        mat = self.fitz.Matrix(SCALE, SCALE)
-        for i, page in enumerate(self.doc):
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            ppm = pix.tobytes("ppm")
-            self.page_imgs_ppm[i] = ppm
-            self.page_sizes[i] = (pix.width, pix.height)
+        self.drag_uid = None
+        self.drag_dx = 0
+        self.drag_dy = 0
 
-    def draw_page(self):
+    def _refresh_preview(self):
+        self._build_exact_preview_pdf()
+        self._draw_page()
+
+    # ---------- drawing & paging ----------
+    def _placements_for_page(self, page_index: int) -> List:
+        return [p for p in self.placements if p.page_index == page_index]
+
+    def _rect_for_uid_pdf_units(self, uid: str, page_index: int):
+        # prefer override, else planned
+        if uid in self.overrides:
+            return self.overrides[uid]
+        for p in self._placements_for_page(page_index):
+            if p.uid == uid:
+                return p.note_rect
+        return None
+
+    def _draw_page(self):
         self.canvas.delete("all")
         w, h = self.page_sizes[self.cur_page]
-        # page image
+        # show the raster of the temporary PDF (already has real notes + highlights)
         self._photo = tk.PhotoImage(data=self.page_imgs_ppm[self.cur_page])
-        bg = self.canvas.create_image(0, 0, anchor="nw", image=self._photo, tags=("pageimg",))
+        self.canvas.create_image(0, 0, anchor="nw", image=self._photo, tags=("pageimg",))
         self.canvas.config(scrollregion=(0, 0, w, h), width=min(w, 1200), height=min(h, 900))
 
-        # optional: draw preview highlights in correct colors
-        if SHOW_HIGHLIGHTS:
-            page = self.doc[self.cur_page]
-            for quote, col in self.color_map.items():
-                # search using same-ish flags as the main algorithm
-                try:
-                    hits = page.search_for(quote, flags=self.flags)
-                except TypeError:
-                    hits = page.search_for(quote)
-                for r in hits or []:
-                    cx0, cy0, cx1, cy1 = (r.x0*SCALE, r.y0*SCALE, r.x1*SCALE, r.y1*SCALE)
-                    # outline + (optional) stippled fill to mimic transparency
-                    kwargs = {"outline": col, "width": 2}
-                    if HIGHLIGHT_STIPPLE:
-                        kwargs.update({"fill": col, "stipple": HIGHLIGHT_STIPPLE})
-                    self.canvas.create_rectangle(cx0, cy0, cx1, cy1, **kwargs, tags=("hit",))
-
-        # note rectangles (draggable), using each note's color
-        for pl in self.placements_by_page.get(self.cur_page, []):
-            x0, y0, x1, y1 = self.overrides.get(pl.uid, pl.note_rect)
+        # overlay simple draggable rectangles (no text rendered in Tk)
+        for pl in self._placements_for_page(self.cur_page):
+            x0, y0, x1, y1 = self._rect_for_uid_pdf_units(pl.uid, self.cur_page)
             col = self.color_map.get(pl.query, "#ff9800")
-            # scale to canvas
             cx0, cy0, cx1, cy1 = (x0*SCALE, y0*SCALE, x1*SCALE, y1*SCALE)
             self.canvas.create_rectangle(cx0, cy0, cx1, cy1,
                                          outline=col, width=2, fill="",
                                          tags=("note", pl.uid))
-            preview = pl.explanation.splitlines()[0][:60]
-            self.canvas.create_text(cx0+6, cy0+10, anchor="nw",
-                                    text=preview, fill=col,
-                                    font=("Segoe UI", 10),
-                                    tags=("note_text", pl.uid))
 
-    # ---- dragging logic ----
+    def prev_page(self):
+        if self.page_count:
+            self.cur_page = (self.cur_page - 1) % self.page_count
+            self._draw_page()
+
+    def next_page(self):
+        if self.page_count:
+            self.cur_page = (self.cur_page + 1) % self.page_count
+            self._draw_page()
+
+    # ---------- dragging ----------
     def _find_uid_at(self, x, y) -> Optional[str]:
         hits = self.canvas.find_overlapping(x, y, x, y)
         for obj in hits:
@@ -215,12 +238,23 @@ class PDFPreviewApp:
                     return t
         return None
 
+    def _rect_for_uid_canvas(self, uid):
+        for obj in self.canvas.find_withtag(uid):
+            if "note" in self.canvas.gettags(obj):
+                return self.canvas.coords(obj)
+        return None
+
+    def _move_uid(self, uid, x0, y0, x1, y1):
+        for obj in self.canvas.find_withtag(uid):
+            if "note" in self.canvas.gettags(obj):
+                self.canvas.coords(obj, x0, y0, x1, y1)
+
     def on_down(self, e):
         uid = self._find_uid_at(e.x, e.y)
         if not uid:
             return
         self.drag_uid = uid
-        rect = self._rect_for_uid(uid)
+        rect = self._rect_for_uid_canvas(uid)
         if rect:
             x0, y0, x1, y1 = rect
             self.drag_dx = e.x - x0
@@ -231,75 +265,58 @@ class PDFPreviewApp:
             return
         x0 = e.x - self.drag_dx
         y0 = e.y - self.drag_dy
-        rect = self._rect_for_uid(self.drag_uid)
+        rect = self._rect_for_uid_canvas(self.drag_uid)
         if not rect:
             return
-        _, _, w, h = self._xywh(rect)
+        w = rect[2]-rect[0]
+        h = rect[3]-rect[1]
         self._move_uid(self.drag_uid, x0, y0, x0 + w, y0 + h)
 
     def on_up(self, e):
         if not self.drag_uid:
             return
-        rect = self._rect_for_uid(self.drag_uid)
+        rect = self._rect_for_uid_canvas(self.drag_uid)
         if rect:
             x0, y0, x1, y1 = rect
             # store back in PDF units
             self.overrides[self.drag_uid] = (x0/SCALE, y0/SCALE, x1/SCALE, y1/SCALE)
         self.drag_uid = None
+        if AUTO_REFRESH_AFTER_DRAG:
+            self._refresh_preview()
 
-    def _rect_for_uid(self, uid):
-        for obj in self.canvas.find_withtag(uid):
-            if "note" in self.canvas.gettags(obj):
-                return self.canvas.coords(obj)
-        return None
+    def _on_mousewheel(self, event):
+        delta = int(-1 * (event.delta / 120))
+        self.canvas.yview_scroll(delta, "units")
 
-    def _xywh(self, rect_coords):
-        x0, y0, x1, y1 = rect_coords
-        return x0, y0, x1 - x0, y1 - y0
-
-    def _move_uid(self, uid, x0, y0, x1, y1):
-        for obj in self.canvas.find_withtag(uid):
-            tags = self.canvas.gettags(obj)
-            if "note" in tags:
-                self.canvas.coords(obj, x0, y0, x1, y1)
-            elif "note_text" in tags:
-                self.canvas.coords(obj, x0 + 6, y0 + 10)
-
-    # ---- paging & export ----
-    def prev_page(self):
-        self.cur_page = (self.cur_page - 1) % self.page_count
-        self.draw_page()
-
-    def next_page(self):
-        self.cur_page = (self.cur_page + 1) % self.page_count
-        self.draw_page()
-
+    # ---------- export ----------
     def export_pdf(self):
+        planned = self._planned_rect_map()
+        combined = {**planned, **self.overrides}  # lock EVERY note
+
         out, hi, no, sk = highlights.highlight_and_margin_comment_pdf(
             pdf_path=self.pdf_path,
             queries=[], comments={},
             annotations_json=self.annotations_json,
             out_path=OUT_PDF,
-            fixed_note_rects=self.overrides,   # <— force dragged positions
-            # must match the knobs used in plan-only pass
-            note_width=240,
-            min_note_width=48,
-            note_fontsize=9.0,
-            note_fill=None, note_border=None, note_border_width=0,
-            note_text="red", draw_leader=False, leader_color=None,
-            allow_column_footer=True,
-            column_footer_max_offset=250,
-            max_vertical_offset=90,
-            max_scan=420,
-            side="outer",
-            allow_center_gutter=True,
-            center_gutter_tolerance=48.0,
-            dedupe_scope="page",
-            note_fontname="PatrickHand",
-            note_fontfile=r".\fonts\PatrickHand-Regular.ttf",
+            fixed_note_rects=combined,   # same rects as preview
+            **self.settings
         )
         messagebox.showinfo("Export complete",
                             f"Saved: {OUT_PDF}\nHighlights={hi}  Notes={no}  Skipped={sk}")
+
+    # ---------- cleanup ----------
+    def _on_close(self):
+        try:
+            if self.doc is not None:
+                self.doc.close()
+        except Exception:
+            pass
+        if self._preview_pdf_path and os.path.exists(self._preview_pdf_path):
+            try:
+                os.remove(self._preview_pdf_path)
+            except Exception:
+                pass
+        self.master.destroy()
 
 def main():
     import sys
@@ -307,7 +324,6 @@ def main():
         print("Usage: python preview_tk.py <pdf_path> <annotations_json>")
         raise SystemExit(2)
     root = tk.Tk()
-    # a sensible initial window size; you can resize freely
     root.geometry("1200x900")
     PDFPreviewApp(root, sys.argv[1], sys.argv[2])
     root.mainloop()

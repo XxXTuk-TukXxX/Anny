@@ -1,16 +1,19 @@
 # annotate_suite.py
-# One UI to: (1) OCR a PDF, (2) configure annotation settings, (3) preview & export.
+# One UI to: (1) OCR a PDF, (2) configure annotation settings, (3) exact preview & export.
 # Requires:
 #   pip install ocrmypdf pymupdf
 # External:
 #   Tesseract OCR installed (or pick its path in Step 1).
 #
 # Files expected alongside this script:
-#   - highlights.py   (contains your highlight_and_margin_comment_pdf with plan_only & overrides)
+#   - highlights.py   (contains highlight_and_margin_comment_pdf with plan_only & fixed_note_rects)
 
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 import threading
 from pathlib import Path
 from typing import Dict, Tuple, List, Optional
@@ -19,9 +22,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 # --- BACKEND (OCR) ---
-import os
-import shutil
 import ocrmypdf
+
 
 def ensure_tesseract_available(custom_tesseract_path: str | None = None) -> None:
     if custom_tesseract_path:
@@ -36,6 +38,16 @@ def ensure_tesseract_available(custom_tesseract_path: str | None = None) -> None
             "in the 'Tesseract path' field."
         )
 
+
+def _remove_background_supported() -> bool:
+    # OCRmyPDF disabled --remove-background in v13+
+    try:
+        major = int(str(ocrmypdf.__version__).split(".")[0])
+        return major < 13
+    except Exception:
+        return False
+
+
 def run_ocr(
     input_pdf: str,
     output_pdf: str | None = None,
@@ -44,7 +56,7 @@ def run_ocr(
     jobs: int | None = None,
     optimize: int = 0,
     deskew: bool = True,
-    clean: bool = True,
+    clean: bool = False,
     custom_tesseract_path: str | None = None,
 ) -> Path:
     ensure_tesseract_available(custom_tesseract_path)
@@ -52,26 +64,47 @@ def run_ocr(
     if not in_path.exists():
         raise FileNotFoundError(f"Input PDF not found: {in_path}")
     out_path = Path(output_pdf) if output_pdf else in_path.with_suffix(".ocr.pdf")
-    ocrmypdf.ocr(
-        input_file=str(in_path),
-        output_file=str(out_path),
-        language=languages,
-        force_ocr=force,
-        skip_text=not force,
-        rotate_pages=True,
-        rotate_pages_threshold=14.0,
-        deskew=deskew,
-        remove_background=clean,
-        optimize=optimize,
-        jobs=jobs,
-        progress_bar=False,
-    )
+
+    use_clean = bool(clean and _remove_background_supported())
+    try:
+        ocrmypdf.ocr(
+            input_file=str(in_path),
+            output_file=str(out_path),
+            language=languages,
+            force_ocr=force,
+            skip_text=not force,
+            rotate_pages=True,
+            rotate_pages_threshold=14.0,
+            deskew=deskew,
+            remove_background=use_clean,
+            optimize=optimize,
+            jobs=jobs,
+            progress_bar=False,
+        )
+    except NotImplementedError:
+        # Fallback if user toggled "clean" on an unsupported version
+        ocrmypdf.ocr(
+            input_file=str(in_path),
+            output_file=str(out_path),
+            language=languages,
+            force_ocr=force,
+            skip_text=not force,
+            rotate_pages=True,
+            rotate_pages_threshold=14.0,
+            deskew=deskew,
+            remove_background=False,
+            optimize=optimize,
+            jobs=jobs,
+            progress_bar=False,
+        )
+
     return out_path
+
 
 # --- IMPORT YOUR HIGHLIGHTER ---
 try:
-    from highlights import highlight_and_margin_comment_pdf  # your drop-in function
-    from highlights import _import_fitz  # use same pymupdf import helper
+    from highlights import highlight_and_margin_comment_pdf  # your function
+    from highlights import _import_fitz  # same PyMuPDF loader
 except Exception as e:
     raise SystemExit(
         "Could not import 'highlight_and_margin_comment_pdf' from highlights.py.\n"
@@ -79,13 +112,16 @@ except Exception as e:
         f"Import error: {e}"
     )
 
-# --- HELPER: JSON color map (for preview colors per quote) ---
+
+# --- HELPERS: JSON color map for UI rectangle outlines ---
 def _tk_color(s: Optional[str], default: str = "#ff9800") -> str:
-    if not s: return default
+    if not s:
+        return default
     s = s.strip()
     if s.startswith("#") and len(s) == 7:
         return s
     return s  # allow 'yellow', 'red', etc.
+
 
 def build_color_map(annotations_json_path: str, fallback: str = "#ff9800") -> Dict[str, str]:
     p = Path(annotations_json_path)
@@ -101,13 +137,14 @@ def build_color_map(annotations_json_path: str, fallback: str = "#ff9800") -> Di
             cmap[q] = _tk_color(row.get("color"), fallback)
     return cmap
 
+
 # --- DEFAULTS (your block) ---
 DEFAULTS = {
     "note_width": 240,
     "min_note_width": 48,
     "note_fontsize": 9.0,
-    "note_fill": "",       # None in UI = empty string => no fill
-    "note_border": "",     # None
+    "note_fill": "",  # empty string -> None
+    "note_border": "",
     "note_border_width": 0,
     "note_text": "red",
     "draw_leader": False,
@@ -125,33 +162,36 @@ DEFAULTS = {
 }
 
 SCALE = 1.5
-SHOW_HIGHLIGHTS = True
-HIGHLIGHT_STIPPLE = "gray25"  # None to disable stippled fill
+AUTO_REFRESH_AFTER_DRAG = True  # rebuild exact preview after every drag
+
 
 class WizardApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PDF OCR → Annotate → Preview/Export")
+        self.title("PDF OCR → Annotate → Preview/Export (Exact)")
         self.geometry("1200x900")
 
         # State shared across steps
-        self.src_pdf: Optional[str] = None      # original PDF chosen
-        self.ocr_pdf: Optional[str] = None      # OCR output (if run)
-        self.ann_json: Optional[str] = None     # annotations JSON
-        self.fixed_overrides: Dict[str, Tuple[float,float,float,float]] = {}  # uid -> rect
-        self.placements = []
+        self.src_pdf: Optional[str] = None  # original PDF chosen
+        self.ocr_pdf: Optional[str] = None  # OCR output (if run)
+        self.ann_json: Optional[str] = None  # annotations JSON
+        self.fixed_overrides: Dict[str, Tuple[float, float, float, float]] = {}  # uid -> rect
+        self.placements = []  # plan-only placements
         self.color_map: Dict[str, str] = {}
+
+        # Preview doc state (temp annotated PDF)
+        self._preview_pdf_path: Optional[str] = None
         self.doc = None
         self.page_imgs_ppm: Dict[int, bytes] = {}
-        self.page_sizes: Dict[int, Tuple[int,int]] = {}
+        self.page_sizes: Dict[int, Tuple[int, int]] = {}
         self.cur_page = 0
 
         self.fitz = _import_fitz()
-        self.flags = self._fitz_flags(self.fitz)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_ui()
 
-    # ---- UI scaffold ----
+    # ---------- UI scaffold ----------
     def _build_ui(self):
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="both", expand=True)
@@ -162,13 +202,13 @@ class WizardApp(tk.Tk):
 
         self.nb.add(self.step1, text="1) OCR PDF")
         self.nb.add(self.step2, text="2) Annotation Settings")
-        self.nb.add(self.step3, text="3) Preview & Export")
+        self.nb.add(self.step3, text="3) Preview (Exact) & Export")
 
         self._build_step1()
         self._build_step2()
         self._build_step3()
 
-    # ---- STEP 1: OCR ----
+    # ---------- STEP 1: OCR ----------
     def _build_step1(self):
         pad = {"padx": 8, "pady": 6}
 
@@ -188,14 +228,20 @@ class WizardApp(tk.Tk):
 
         self.force_var = tk.BooleanVar(value=False)
         self.deskew_var = tk.BooleanVar(value=True)
-        self.clean_var = tk.BooleanVar(value=True)
+        self.clean_var = tk.BooleanVar(value=_remove_background_supported())
         self.optimize_var = tk.IntVar(value=0)
+
         ttk.Checkbutton(self.step1, text="Force OCR (re-OCR pages with text)", variable=self.force_var)\
             .grid(row=3, column=1, sticky="w", **pad)
         ttk.Checkbutton(self.step1, text="Deskew", variable=self.deskew_var)\
             .grid(row=4, column=1, sticky="w", **pad)
-        ttk.Checkbutton(self.step1, text="Clean background", variable=self.clean_var)\
-            .grid(row=5, column=1, sticky="w", **pad)
+        self.clean_chk = ttk.Checkbutton(self.step1, text="Clean background", variable=self.clean_var)
+        self.clean_chk.grid(row=5, column=1, sticky="w", **pad)
+        if not _remove_background_supported():
+            self.clean_var.set(False)
+            self.clean_chk.state(["disabled"])
+            ttk.Label(self.step1, text="(not supported by your OCRmyPDF version)", foreground="gray")\
+                .grid(row=5, column=2, sticky="w", **pad)
 
         tk.Label(self.step1, text="Optimize (0–3):").grid(row=6, column=0, sticky="e", **pad)
         tk.Spinbox(self.step1, from_=0, to=3, textvariable=self.optimize_var, width=5)\
@@ -207,12 +253,12 @@ class WizardApp(tk.Tk):
         ttk.Button(self.step1, text="Find...", command=self._browse_tesseract).grid(row=7, column=2, **pad)
 
         self.ocr_status = tk.StringVar(value="Idle")
-        tk.Label(self.step1, textvariable=self.ocr_status, fg="gray").grid(row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0,6))
+        tk.Label(self.step1, textvariable=self.ocr_status, fg="gray").grid(row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6))
         self.ocr_prog = ttk.Progressbar(self.step1, mode="indeterminate")
-        self.ocr_prog.grid(row=9, column=0, columnspan=3, sticky="we", padx=12, pady=(0,12))
+        self.ocr_prog.grid(row=9, column=0, columnspan=3, sticky="we", padx=12, pady=(0, 12))
 
         bar = ttk.Frame(self.step1)
-        bar.grid(row=10, column=0, columnspan=3, sticky="e", padx=12, pady=(4,12))
+        bar.grid(row=10, column=0, columnspan=3, sticky="e", padx=12, pady=(4, 12))
         ttk.Button(bar, text="Run OCR", command=self._run_ocr_clicked).pack(side="left", padx=6)
         ttk.Button(bar, text="Skip OCR → Next", command=lambda: self.nb.select(self.step2)).pack(side="left", padx=6)
 
@@ -225,15 +271,19 @@ class WizardApp(tk.Tk):
                 self.out_var.set(str(Path(p).with_suffix(".ocr.pdf")))
 
     def _browse_out_pdf(self):
-        p = filedialog.asksaveasfilename(title="Save OCR'd PDF as...",
-                                         defaultextension=".pdf",
-                                         filetypes=[("PDF files", "*.pdf")])
+        p = filedialog.asksaveasfilename(
+            title="Save OCR'd PDF as...",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf")],
+        )
         if p:
             self.out_var.set(p)
 
     def _browse_tesseract(self):
-        p = filedialog.askopenfilename(title="Locate Tesseract executable",
-                                       filetypes=[("Executable", "*.exe"), ("All files", "*.*")])
+        p = filedialog.askopenfilename(
+            title="Locate Tesseract executable",
+            filetypes=[("Executable", "*.exe"), ("All files", "*.*")],
+        )
         if p:
             self.tess_var.set(p)
 
@@ -258,9 +308,10 @@ class WizardApp(tk.Tk):
                     custom_tesseract_path=(self.tess_var.get().strip() or None),
                 )
             except Exception as e:
-                self.after(0, lambda: self._ocr_done(error=f"{type(e).__name__}: {e}"))
+                err_msg = f"{type(e).__name__}: {e}"
+                self.after(0, lambda m=err_msg: self._ocr_done(error=m))
                 return
-            self.after(0, lambda: self._ocr_done(result=str(outp)))
+            self.after(0, lambda p=str(outp): self._ocr_done(result=p))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -272,11 +323,11 @@ class WizardApp(tk.Tk):
             return
         self.ocr_status.set("Done")
         self.ocr_pdf = result
-        self.src_pdf = self.src_pdf or result  # if starting from blank
+        self.src_pdf = self.src_pdf or result
         messagebox.showinfo("Success", f"OCR complete:\n{result}\n\nProceed to Step 2.")
         self.nb.select(self.step2)
 
-    # ---- STEP 2: Settings ----
+    # ---------- STEP 2: Settings ----------
     def _build_step2(self):
         pad = {"padx": 8, "pady": 4}
         row = 0
@@ -293,7 +344,7 @@ class WizardApp(tk.Tk):
         tk.Entry(self.step2, textvariable=self.fontname_var, width=24).grid(row=row, column=1, sticky="w", **pad)
         row += 1
 
-        tk.Label(self.step2, text="Font file (TTF):").grid(row=row, column=0, sticky="e", **pad)
+        tk.Label(self.step2, text="Font file (TTF/OTF):").grid(row=row, column=0, sticky="e", **pad)
         self.fontfile_var = tk.StringVar(value=DEFAULTS["note_fontfile"])
         tk.Entry(self.step2, textvariable=self.fontfile_var, width=80).grid(row=row, column=1, **pad)
         ttk.Button(self.step2, text="Browse...", command=self._browse_font).grid(row=row, column=2, **pad)
@@ -320,7 +371,7 @@ class WizardApp(tk.Tk):
         ttk.Entry(f, textvariable=self.fontsize_var, width=8).grid(row=0, column=5, sticky="w")
 
         f2 = ttk.LabelFrame(self.step2, text="Placement")
-        f2.grid(row=row+1, column=0, columnspan=3, sticky="we", padx=8, pady=8)
+        f2.grid(row=row + 1, column=0, columnspan=3, sticky="we", padx=8, pady=8)
         ttk.Checkbutton(f2, text="Allow column footer", variable=self.col_footer_var).grid(row=0, column=0, sticky="w", padx=6, pady=4)
         ttk.Label(f2, text="Footer max offset").grid(row=0, column=1, sticky="e")
         ttk.Entry(f2, textvariable=self.col_footer_max_var, width=8).grid(row=0, column=2, sticky="w")
@@ -331,8 +382,13 @@ class WizardApp(tk.Tk):
 
         ttk.Label(f2, text="Side").grid(row=1, column=0, sticky="e", padx=6)
         self.side_var = tk.StringVar(value=DEFAULTS["side"])
-        ttk.Combobox(f2, textvariable=self.side_var, values=["nearest","left","right","outer","inner"], width=10, state="readonly")\
-            .grid(row=1, column=1, sticky="w")
+        ttk.Combobox(
+            f2,
+            textvariable=self.side_var,
+            values=["nearest", "left", "right", "outer", "inner"],
+            width=10,
+            state="readonly",
+        ).grid(row=1, column=1, sticky="w")
         ttk.Checkbutton(f2, text="Allow center gutter", variable=self.center_gutter_var).grid(row=1, column=2, sticky="w", padx=6)
         ttk.Label(f2, text="Center tolerance").grid(row=1, column=3, sticky="e")
         ttk.Entry(f2, textvariable=self.center_tol_var, width=8).grid(row=1, column=4, sticky="w")
@@ -346,7 +402,7 @@ class WizardApp(tk.Tk):
         self.leader_color_var = tk.StringVar(value=DEFAULTS["leader_color"])
 
         f3 = ttk.LabelFrame(self.step2, text="Visuals")
-        f3.grid(row=row+2, column=0, columnspan=3, sticky="we", padx=8, pady=8)
+        f3.grid(row=row + 2, column=0, columnspan=3, sticky="we", padx=8, pady=8)
         ttk.Label(f3, text="Note fill (empty=None)").grid(row=0, column=0, sticky="e", padx=6, pady=4)
         ttk.Entry(f3, textvariable=self.note_fill_var, width=14).grid(row=0, column=1, sticky="w")
         ttk.Label(f3, text="Border (empty=None)").grid(row=0, column=2, sticky="e", padx=6)
@@ -360,7 +416,7 @@ class WizardApp(tk.Tk):
         ttk.Entry(f3, textvariable=self.leader_color_var, width=14).grid(row=1, column=4, sticky="w")
 
         bar = ttk.Frame(self.step2)
-        bar.grid(row=row+3, column=0, columnspan=3, sticky="e", padx=12, pady=12)
+        bar.grid(row=row + 3, column=0, columnspan=3, sticky="e", padx=12, pady=12)
         ttk.Button(bar, text="Compute Preview", command=self._compute_preview_clicked).pack(side="left", padx=6)
         ttk.Button(bar, text="Next → Preview", command=lambda: self.nb.select(self.step3)).pack(side="left", padx=6)
 
@@ -376,12 +432,11 @@ class WizardApp(tk.Tk):
             self.fontfile_var.set(p)
 
     def _gather_settings(self):
-        # convert empty strings to None for "no color"
-        def none_if_empty(s):
-            s = s.strip()
+        def none_if_empty(s: str | None):
+            s = (s or "").strip()
             return None if s == "" else s
 
-        s = dict(
+        return dict(
             note_width=int(self.note_width_var.get()),
             min_note_width=int(self.min_width_var.get()),
             note_fontsize=float(self.fontsize_var.get()),
@@ -398,11 +453,10 @@ class WizardApp(tk.Tk):
             side=self.side_var.get(),
             allow_center_gutter=bool(self.center_gutter_var.get()),
             center_gutter_tolerance=float(self.center_tol_var.get()),
-            dedupe_scope="page",  # keep your default
+            dedupe_scope="page",
             note_fontname=self.fontname_var.get().strip() or "PatrickHand",
             note_fontfile=self.fontfile_var.get().strip() or None,
         )
-        return s
 
     def _compute_preview_clicked(self):
         if not (self.ocr_pdf or self.src_pdf):
@@ -415,17 +469,16 @@ class WizardApp(tk.Tk):
         pdf_path = self.ocr_pdf or self.src_pdf
         self.ann_json = self.json_var.get().strip()
         self.color_map = build_color_map(self.ann_json, fallback="#ff9800")
-
         settings = self._gather_settings()
 
-        # plan-only pass to get placements
         try:
             _, hits, notes, skipped, placements = highlight_and_margin_comment_pdf(
                 pdf_path=pdf_path,
-                queries=[], comments={},
+                queries=[],
+                comments={},
                 annotations_json=self.ann_json,
                 plan_only=True,
-                **settings
+                **settings,
             )
         except Exception as e:
             messagebox.showerror("Preview failed", f"{type(e).__name__}: {e}")
@@ -433,14 +486,15 @@ class WizardApp(tk.Tk):
 
         self.placements = placements
         self.fixed_overrides = {}  # reset
-        self._open_doc(pdf_path)
-        self._rasterize_pages()
+
+        # Build exact preview PDF and rasterize it
+        self._build_exact_preview_pdf()
         self.cur_page = 0
         self._draw_page()
         self.nb.select(self.step3)
         messagebox.showinfo("Preview ready", f"Found {hits} highlights, {notes} notes (skipped {skipped}).")
 
-    # ---- STEP 3: Preview/Export ----
+    # ---------- STEP 3: Preview/Export ----------
     def _build_step3(self):
         # Toolbar
         tb = ttk.Frame(self.step3)
@@ -448,7 +502,9 @@ class WizardApp(tk.Tk):
         ttk.Button(tb, text="◀ Prev page", command=self._prev_page).pack(side="left", padx=4, pady=6)
         ttk.Button(tb, text="Next page ▶", command=self._next_page).pack(side="left", padx=4, pady=6)
 
-        ttk.Label(tb, text="Export to:").pack(side="left", padx=(24,6))
+        ttk.Button(tb, text="Refresh preview", command=self._refresh_preview).pack(side="left", padx=12)
+
+        ttk.Label(tb, text="Export to:").pack(side="left", padx=(24, 6))
         self.export_var = tk.StringVar(value="annotated.pdf")
         ttk.Entry(tb, textvariable=self.export_var, width=40).pack(side="left", padx=4)
         ttk.Button(tb, text="Browse...", command=self._browse_export).pack(side="left", padx=4)
@@ -476,11 +532,46 @@ class WizardApp(tk.Tk):
         # Scroll wheel
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
         self.canvas.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-2, "units"))
-        self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll( 2, "units"))
+        self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll(2, "units"))
 
         self._drag_uid = None
         self._drag_dx = 0
         self._drag_dy = 0
+
+    # ---------- Preview building / drawing ----------
+    def _planned_rect_map(self) -> Dict[str, Tuple[float, float, float, float]]:
+        return {p.uid: p.note_rect for p in self.placements}
+
+    def _build_exact_preview_pdf(self):
+        """Render a temporary annotated PDF (identical to export), then rasterize."""
+        if not (self.ocr_pdf or self.src_pdf):
+            return
+        pdf_path = self.ocr_pdf or self.src_pdf
+        settings = self._gather_settings()
+
+        planned = self._planned_rect_map()
+        combined = {**planned, **self.fixed_overrides}  # lock EVERY note
+
+        # temp file
+        fd, tmp = tempfile.mkstemp(suffix="_annot_preview.pdf")
+        os.close(fd)
+        self._preview_pdf_path = tmp
+
+        # draw real PDF using the same engine/path as export
+        highlight_and_margin_comment_pdf(
+            pdf_path=pdf_path,
+            queries=[],
+            comments={},
+            annotations_json=self.ann_json,
+            out_path=tmp,
+            fixed_note_rects=combined,
+            **settings,
+        )
+
+        # open and rasterize
+        self._open_doc(tmp)
+        self._rasterize_pages()
+        self.cur_page = max(0, min(self.cur_page, len(self.page_imgs_ppm) - 1))
 
     def _open_doc(self, pdf_path: str):
         if self.doc is not None:
@@ -503,41 +594,23 @@ class WizardApp(tk.Tk):
         self.canvas.delete("all")
         w, h = self.page_sizes[self.cur_page]
         photo = tk.PhotoImage(data=self.page_imgs_ppm[self.cur_page])
-        self._photo = photo  # keep a reference
+        self._photo = photo  # keep a ref
         self.canvas.create_image(0, 0, anchor="nw", image=photo, tags=("pageimg",))
         self.canvas.config(scrollregion=(0, 0, w, h), width=min(w, 1200), height=min(h, 900))
 
-        # preview real highlights
-        if SHOW_HIGHLIGHTS:
-            page = self.doc[self.cur_page]
-            for quote, col in self.color_map.items():
-                try:
-                    hits = page.search_for(quote, flags=self.flags)
-                except TypeError:
-                    hits = page.search_for(quote)
-                for r in hits or []:
-                    rx0, ry0, rx1, ry1 = r.x0*SCALE, r.y0*SCALE, r.x1*SCALE, r.y1*SCALE
-                    kwargs = {"outline": col, "width": 2}
-                    if HIGHLIGHT_STIPPLE:
-                        kwargs.update({"fill": col, "stipple": HIGHLIGHT_STIPPLE})
-                    self.canvas.create_rectangle(rx0, ry0, rx1, ry1, **kwargs, tags=("hit",))
-
-        # draw draggable notes
-        page_placements = [p for p in self.placements if p.page_index == self.cur_page]
-        for pl in page_placements:
+        # overlay simple draggable boxes (no Tk text; PDF already has real note text)
+        for pl in [p for p in self.placements if p.page_index == self.cur_page]:
             x0, y0, x1, y1 = self.fixed_overrides.get(pl.uid, pl.note_rect)
             col = self.color_map.get(pl.query, "#ff9800")
-            cx0, cy0, cx1, cy1 = x0*SCALE, y0*SCALE, x1*SCALE, y1*SCALE
-            self.canvas.create_rectangle(cx0, cy0, cx1, cy1,
-                                         outline=col, width=2, fill="",
-                                         tags=("note", pl.uid))
-            preview = pl.explanation.splitlines()[0][:60]
-            self.canvas.create_text(cx0+6, cy0+10, anchor="nw",
-                                    text=preview, fill=col,
-                                    font=("Segoe UI", 10),
-                                    tags=("note_text", pl.uid))
+            cx0, cy0, cx1, cy1 = x0 * SCALE, y0 * SCALE, x1 * SCALE, y1 * SCALE
+            # tag with a stable uid prefix so hit-testing is robust
+            self.canvas.create_rectangle(
+                cx0, cy0, cx1, cy1,
+                outline=col, width=2, fill="",
+                tags=("note", f"uid:{pl.uid}")
+            )
 
-    # paging
+    # ---------- paging ----------
     def _prev_page(self):
         self.cur_page = (self.cur_page - 1) % len(self.page_imgs_ppm)
         self._draw_page()
@@ -547,42 +620,40 @@ class WizardApp(tk.Tk):
         self._draw_page()
 
     def _browse_export(self):
-        p = filedialog.asksaveasfilename(title="Export annotated PDF as...",
-                                         defaultextension=".pdf",
-                                         filetypes=[("PDF files", "*.pdf")])
+        p = filedialog.asksaveasfilename(
+            title="Export annotated PDF as...",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf")],
+        )
         if p:
             self.export_var.set(p)
 
-    # dragging
+    # ---------- dragging ----------
     def _find_uid_at(self, x, y) -> Optional[str]:
         hits = self.canvas.find_overlapping(x, y, x, y)
         for obj in hits:
-            tags = self.canvas.gettags(obj)
-            for t in tags:
-                if len(t) == 12 and all(c in "0123456789abcdef" for c in t):
-                    return t
+            for t in self.canvas.gettags(obj):
+                if t.startswith("uid:"):
+                    return t[4:]  # strip "uid:"
         return None
 
-    def _rect_for_uid(self, uid):
-        for obj in self.canvas.find_withtag(uid):
+    def _rect_for_uid_canvas(self, uid):
+        for obj in self.canvas.find_withtag(f"uid:{uid}"):
             if "note" in self.canvas.gettags(obj):
                 return self.canvas.coords(obj)  # [x0,y0,x1,y1]
         return None
 
     def _move_uid(self, uid, x0, y0, x1, y1):
-        for obj in self.canvas.find_withtag(uid):
-            tags = self.canvas.gettags(obj)
-            if "note" in tags:
+        for obj in self.canvas.find_withtag(f"uid:{uid}"):
+            if "note" in self.canvas.gettags(obj):
                 self.canvas.coords(obj, x0, y0, x1, y1)
-            elif "note_text" in tags:
-                self.canvas.coords(obj, x0 + 6, y0 + 10)
 
     def _on_down(self, e):
         uid = self._find_uid_at(e.x, e.y)
         if not uid:
             return
         self._drag_uid = uid
-        rect = self._rect_for_uid(uid)
+        rect = self._rect_for_uid_canvas(uid)
         if rect:
             x0, y0, x1, y1 = rect
             self._drag_dx = e.x - x0
@@ -593,33 +664,33 @@ class WizardApp(tk.Tk):
             return
         x0 = e.x - self._drag_dx
         y0 = e.y - self._drag_dy
-        rect = self._rect_for_uid(self._drag_uid)
+        rect = self._rect_for_uid_canvas(self._drag_uid)
         if not rect:
             return
-        _, _, w, h = rect[0], rect[1], rect[2]-rect[0], rect[3]-rect[1]
-        self._move_uid(self._drag_uid, x0, y0, x0+w, y0+h)
+        w = rect[2] - rect[0]
+        h = rect[3] - rect[1]
+        self._move_uid(self._drag_uid, x0, y0, x0 + w, y0 + h)
 
     def _on_up(self, e):
         if not self._drag_uid:
             return
-        rect = self._rect_for_uid(self._drag_uid)
+        rect = self._rect_for_uid_canvas(self._drag_uid)
         if rect:
             x0, y0, x1, y1 = rect
-            self.fixed_overrides[self._drag_uid] = (x0/SCALE, y0/SCALE, x1/SCALE, y1/SCALE)
+            self.fixed_overrides[self._drag_uid] = (x0 / SCALE, y0 / SCALE, x1 / SCALE, y1 / SCALE)
         self._drag_uid = None
+        if AUTO_REFRESH_AFTER_DRAG:
+            self._refresh_preview()
 
     def _on_mousewheel(self, event):
         delta = int(-1 * (event.delta / 120))
         self.canvas.yview_scroll(delta, "units")
 
-    def _fitz_flags(self, fitz):
-        ci = getattr(fitz, "TEXT_IGNORECASE", None) or getattr(fitz, "TEXT_IGNORE_CASE", 0)
-        dehy = getattr(fitz, "TEXT_DEHYPHENATE", 0)
-        flags = 0
-        if ci: flags |= ci
-        if dehy: flags |= dehy
-        return flags
+    def _refresh_preview(self):
+        self._build_exact_preview_pdf()
+        self._draw_page()
 
+    # ---------- export ----------
     def _export_clicked(self):
         if not self.export_var.get().strip():
             messagebox.showwarning("Missing path", "Choose an export filename.")
@@ -633,15 +704,18 @@ class WizardApp(tk.Tk):
 
         pdf_path = self.ocr_pdf or self.src_pdf
         settings = self._gather_settings()
+        planned = self._planned_rect_map()
+        combined = {**planned, **self.fixed_overrides}  # lock EVERY note
 
         try:
             out, hi, no, sk = highlight_and_margin_comment_pdf(
                 pdf_path=pdf_path,
-                queries=[], comments={},
+                queries=[],
+                comments={},
                 annotations_json=self.ann_json,
                 out_path=self.export_var.get().strip(),
-                fixed_note_rects=self.fixed_overrides,
-                **settings
+                fixed_note_rects=combined,
+                **settings,
             )
         except Exception as e:
             messagebox.showerror("Export failed", f"{type(e).__name__}: {e}")
@@ -649,9 +723,25 @@ class WizardApp(tk.Tk):
 
         messagebox.showinfo("Done", f"Saved: {out}\nHighlights={hi}  Notes={no}  Skipped={sk}")
 
+    # ---------- cleanup ----------
+    def _on_close(self):
+        try:
+            if self.doc is not None:
+                self.doc.close()
+        except Exception:
+            pass
+        if self._preview_pdf_path and os.path.exists(self._preview_pdf_path):
+            try:
+                os.remove(self._preview_pdf_path)
+            except Exception:
+                pass
+        self.destroy()
+
+
 def main():
     app = WizardApp()
     app.mainloop()
+
 
 if __name__ == "__main__":
     main()
