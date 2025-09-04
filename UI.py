@@ -162,7 +162,10 @@ DEFAULTS = {
 }
 
 SCALE = 1.5
-AUTO_REFRESH_AFTER_DRAG = True  # rebuild exact preview after every drag
+# Default off: rebuilding the full PDF on every drag makes the UI feel choppy
+# and can also cause the layout engine to re-evaluate placements. Users can
+# still click the "Refresh preview" button to rebuild when ready.
+AUTO_REFRESH_AFTER_DRAG = False
 
 
 class WizardApp(tk.Tk):
@@ -503,6 +506,11 @@ class WizardApp(tk.Tk):
         ttk.Button(tb, text="Next page ▶", command=self._next_page).pack(side="left", padx=4, pady=6)
 
         ttk.Button(tb, text="Refresh preview", command=self._refresh_preview).pack(side="left", padx=12)
+        # Preview behavior toggles
+        self.freeze_all_var = tk.BooleanVar(value=True)
+        self.auto_refresh_var = tk.BooleanVar(value=AUTO_REFRESH_AFTER_DRAG)
+        ttk.Checkbutton(tb, text="Freeze layout", variable=self.freeze_all_var).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(tb, text="Auto-refresh after drag", variable=self.auto_refresh_var).pack(side="left", padx=(8, 0))
 
         ttk.Label(tb, text="Export to:").pack(side="left", padx=(24, 6))
         self.export_var = tk.StringVar(value="annotated.pdf")
@@ -550,7 +558,12 @@ class WizardApp(tk.Tk):
         settings = self._gather_settings()
 
         planned = self._planned_rect_map()
-        combined = {**planned, **self.fixed_overrides}  # lock EVERY note
+        # Freeze all notes by default: pass all planned rects as fixed
+        if getattr(self, "freeze_all_var", None) is not None and self.freeze_all_var.get():
+            combined = {**planned, **self.fixed_overrides}
+        else:
+            # Only force edited ones; let untouched notes auto-place
+            combined = {**self.fixed_overrides}
 
         # temp file
         fd, tmp = tempfile.mkstemp(suffix="_annot_preview.pdf")
@@ -565,6 +578,7 @@ class WizardApp(tk.Tk):
             annotations_json=self.ann_json,
             out_path=tmp,
             fixed_note_rects=combined,
+            freeze_placements=(self.placements if getattr(self, "freeze_all_var", None) is not None and self.freeze_all_var.get() else None),
             **settings,
         )
 
@@ -630,11 +644,41 @@ class WizardApp(tk.Tk):
 
     # ---------- dragging ----------
     def _find_uid_at(self, x, y) -> Optional[str]:
-        hits = self.canvas.find_overlapping(x, y, x, y)
-        for obj in hits:
+        """Return uid for the topmost note whose rectangle contains (x,y).
+        Falls back to a small overlap tolerance for border clicks.
+        Coordinates must be canvas-space (use canvasx/canvasy).
+        """
+        # Prefer interior hit: check all note rectangles whose bbox contains the point
+        note_items = list(self.canvas.find_withtag("note"))
+        containing = []
+        for obj in note_items:
+            coords = self.canvas.coords(obj)
+            if not coords or len(coords) < 4:
+                continue
+            x0, y0, x1, y1 = coords[:4]
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                containing.append(obj)
+
+        if containing:
+            # pick topmost among containing
+            for obj in reversed(self.canvas.find_all()):
+                if obj in containing:
+                    for t in self.canvas.gettags(obj):
+                        if t.startswith("uid:"):
+                            return t[4:]
+            # fallback just in case tags missing
+            obj = containing[-1]
             for t in self.canvas.gettags(obj):
                 if t.startswith("uid:"):
-                    return t[4:]  # strip "uid:"
+                    return t[4:]
+
+        # Fallback: small tolerance around pointer to catch border-only clicks
+        tol = 4
+        hits = self.canvas.find_overlapping(x - tol, y - tol, x + tol, y + tol)
+        for obj in reversed(hits):  # topmost first
+            for t in self.canvas.gettags(obj):
+                if t.startswith("uid:"):
+                    return t[4:]
         return None
 
     def _rect_for_uid_canvas(self, uid):
@@ -649,21 +693,24 @@ class WizardApp(tk.Tk):
                 self.canvas.coords(obj, x0, y0, x1, y1)
 
     def _on_down(self, e):
-        uid = self._find_uid_at(e.x, e.y)
+        # Convert to canvas coordinates to respect scrolling
+        cx, cy = self.canvas.canvasx(e.x), self.canvas.canvasy(e.y)
+        uid = self._find_uid_at(cx, cy)
         if not uid:
             return
         self._drag_uid = uid
         rect = self._rect_for_uid_canvas(uid)
         if rect:
             x0, y0, x1, y1 = rect
-            self._drag_dx = e.x - x0
-            self._drag_dy = e.y - y0
+            self._drag_dx = cx - x0
+            self._drag_dy = cy - y0
 
     def _on_drag(self, e):
         if not self._drag_uid:
             return
-        x0 = e.x - self._drag_dx
-        y0 = e.y - self._drag_dy
+        cx, cy = self.canvas.canvasx(e.x), self.canvas.canvasy(e.y)
+        x0 = cx - self._drag_dx
+        y0 = cy - self._drag_dy
         rect = self._rect_for_uid_canvas(self._drag_uid)
         if not rect:
             return
@@ -679,7 +726,12 @@ class WizardApp(tk.Tk):
             x0, y0, x1, y1 = rect
             self.fixed_overrides[self._drag_uid] = (x0 / SCALE, y0 / SCALE, x1 / SCALE, y1 / SCALE)
         self._drag_uid = None
-        if AUTO_REFRESH_AFTER_DRAG:
+        # Respect UI toggle; default off for smoother interactions
+        try:
+            do_auto = bool(self.auto_refresh_var.get())
+        except Exception:
+            do_auto = bool(AUTO_REFRESH_AFTER_DRAG)
+        if do_auto:
             self._refresh_preview()
 
     def _on_mousewheel(self, event):
@@ -705,7 +757,10 @@ class WizardApp(tk.Tk):
         pdf_path = self.ocr_pdf or self.src_pdf
         settings = self._gather_settings()
         planned = self._planned_rect_map()
-        combined = {**planned, **self.fixed_overrides}  # lock EVERY note
+        if getattr(self, "freeze_all_var", None) is not None and self.freeze_all_var.get():
+            combined = {**planned, **self.fixed_overrides}
+        else:
+            combined = {**self.fixed_overrides}
 
         try:
             out, hi, no, sk = highlight_and_margin_comment_pdf(
@@ -715,6 +770,7 @@ class WizardApp(tk.Tk):
                 annotations_json=self.ann_json,
                 out_path=self.export_var.get().strip(),
                 fixed_note_rects=combined,
+                freeze_placements=(self.placements if getattr(self, "freeze_all_var", None) is not None and self.freeze_all_var.get() else None),
                 **settings,
             )
         except Exception as e:

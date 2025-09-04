@@ -793,6 +793,8 @@ def highlight_and_margin_comment_pdf(
     plan_only: bool = False,
     fixed_note_rects: Optional[Dict[str, Tuple[float, float, float, float]]] = None,
     emit_callback=None,
+    # Freeze mode: draw exactly given placements; skip search/auto-placement
+    freeze_placements: Optional[List[NotePlacement]] = None,
 ):
     """
     When plan_only=False (default):
@@ -896,6 +898,101 @@ def highlight_and_margin_comment_pdf(
     doc_commented: set = set()
 
     placements: List[NP] = []  # type: ignore # collect in both modes if desired
+
+    # ---------- Freeze mode: render exactly the provided placements ----------
+    if freeze_placements is not None:
+        # 1) Draw highlights by searching only (does not affect placements)
+        for page in doc:
+            page_hits = []
+            for q in qlist:
+                hits = _search_page(page, q, flags)
+                if hits:
+                    hits = _dedup_rects(hits)
+                    page_hits.extend((q, h) for h in hits)
+            if not page_hits:
+                continue
+            hits_by_query: Dict[str, List] = defaultdict(list)
+            for q, h in page_hits:
+                hits_by_query[q].append(h)
+            for q, quads in hits_by_query.items():
+                if not quads:
+                    continue
+                quads = _dedup_rects(quads)
+                annot = _add_highlight(page, quads)
+                col = per_highlight_color.get(q, default_hi)
+                if hasattr(annot, "set_colors"):
+                    try:
+                        annot.set_colors(stroke=col, fill=col)
+                    except TypeError:
+                        try:
+                            annot.set_colors(stroke=col)
+                        except TypeError:
+                            pass
+                if hasattr(annot, "set_opacity"):
+                    try:
+                        annot.set_opacity(0.25)
+                    except Exception:
+                        pass
+                if hasattr(annot, "update"):
+                    try:
+                        annot.update()
+                    except Exception:
+                        pass
+
+        # 2) Draw note boxes + text exactly at provided rectangles (or overrides)
+        total_notes = 0
+        for pl in freeze_placements:
+            try:
+                page = doc[int(pl.page_index)]
+            except Exception:
+                continue
+
+            # Determine position: override wins
+            if fixed_note_rects and pl.uid in fixed_note_rects:
+                pos = fitz.Rect(*fixed_note_rects[pl.uid])
+            else:
+                pos = fitz.Rect(*_rect_tuple(pl.note_rect))
+
+            # Draw box
+            _draw_note_box(page, pos, stroke_rgb=brd_rgb, fill_rgb=fill_rgb,
+                           width=note_border_width, opacity=note_opacity)
+
+            # Text
+            inner = pos + (note_padding, note_padding, -note_padding, -note_padding)
+            tcol = per_highlight_color.get(getattr(pl, 'query', ''), txt_rgb)
+            _insert_textbox(
+                page, inner, str(getattr(pl, 'explanation', '')),
+                fontsize=note_fontsize,
+                color=tcol,
+                fontname=metric_fontname,
+                fontfile=note_fontfile,
+                debug=debug,
+                force_line_draw=True
+            )
+
+            # Optional leader line to the anchor block edge
+            if draw_leader and lead_rgb is not None and getattr(pl, 'anchor_rect', None):
+                try:
+                    br = fitz.Rect(*_rect_tuple(pl.anchor_rect))
+                    midy = 0.5 * (pos.y0 + pos.y1)
+                    if pos.x1 <= br.x0:
+                        _draw_line(page, fitz.Point(pos.x1, midy), fitz.Point(br.x0, midy),
+                                   color=lead_rgb, width=0.6)
+                    elif pos.x0 >= br.x1:
+                        _draw_line(page, fitz.Point(pos.x0, midy), fitz.Point(br.x1, midy),
+                                   color=lead_rgb, width=0.6)
+                except Exception:
+                    pass
+
+            total_notes += 1
+
+        if not plan_only:
+            doc.save(out_path, deflate=True, garbage=4)
+            doc.close()
+            return str(out_path), 0, total_notes, 0
+        else:
+            doc.close()
+            return None, 0, total_notes, 0, list(freeze_placements)
 
     def _fallback_band(page):
         words = page.get_text("words") or []
