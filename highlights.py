@@ -10,6 +10,7 @@ import json
 
 from dataclasses import dataclass
 import hashlib
+import math
 
 
 # --- ADD: data model for one planned note ---
@@ -104,6 +105,48 @@ def _draw_note_box(page, pos, *, stroke_rgb, fill_rgb, width, opacity):
         return None
     return _draw_rect(page, pos, stroke=stroke_rgb, fill=fill_rgb,
                       width=width, opacity=opacity)
+
+def _draw_rotated_rect(page, rect, angle_deg: float, *, stroke_rgb, fill_rgb, width: float = 1.0, opacity: Optional[float] = None):
+    """Draw a rectangle rotated by angle_deg around its center as a polygon.
+    Tries draw_polygon / draw_polyline; falls back to 4 lines.
+    """
+    fitz = _import_fitz()
+    r = getattr(rect, "rect", rect)
+    cx = 0.5 * (float(r.x0) + float(r.x1))
+    cy = 0.5 * (float(r.y0) + float(r.y1))
+    pts = [
+        (float(r.x0), float(r.y0)),
+        (float(r.x1), float(r.y0)),
+        (float(r.x1), float(r.y1)),
+        (float(r.x0), float(r.y1)),
+    ]
+    rad = (float(angle_deg) % 360.0) * 3.141592653589793 / 180.0
+    c = math.cos(rad); s = math.sin(rad)
+    rpts = []
+    for x, y in pts:
+        dx, dy = x - cx, y - cy
+        rx = cx + c * dx - s * dy
+        ry = cy + s * dx + c * dy
+        rpts.append(fitz.Point(rx, ry))
+
+    # Attempt polygon draw
+    try:
+        return page.draw_polygon(rpts, color=stroke_rgb, fill=fill_rgb, width=width, close=True, opacity=opacity)
+    except Exception:
+        pass
+    try:
+        return page.draw_polyline(rpts + [rpts[0]], color=stroke_rgb, width=width, closePath=True)
+    except Exception:
+        pass
+    # Fallback: draw lines
+    try:
+        for i in range(4):
+            p0 = rpts[i]
+            p1 = rpts[(i + 1) % 4]
+            _draw_line(page, p0, p1, color=stroke_rgb, width=width)
+    except Exception:
+        return None
+    return None
 
 # ---------- text insertion (TextWriter fallback) ----------
 def _sanitize_punct(s: str) -> str:
@@ -293,7 +336,8 @@ def _draw_paragraph_textwriter(page, rect, text: str, *,
                                fontsize: float, color: Optional[Color],
                                fontname: Optional[str], fontfile: Optional[str],
                                tightness=0.96, line_height_factor=1.18,
-                               debug: bool = False) -> int:
+                               debug: bool = False,
+                               rotate: Optional[float] = None) -> int:
     """
     Draw wrapped text into 'rect' using TextWriter and a real TTF/OTF font.
     Super robust across older PyMuPDF versions.
@@ -368,10 +412,45 @@ def _draw_paragraph_textwriter(page, rect, text: str, *,
         y += line_height_factor * fontsize
 
     if tw is not None and appended_any:
+        # If a non-90-degree rotation is requested, draw via temp PDF and stamp rotated
+        ang = None
         try:
-            tw.write_text(page)
-        except Exception as e:
-            if debug: print(f"[textwriter] write_text failed: {e}")
+            if rotate is not None:
+                ang = float(rotate)
+        except Exception:
+            ang = None
+
+        if ang is not None and (abs((ang % 360.0)) > 0.5) and (int(round(ang)) % 90 != 0):
+            try:
+                textdoc = fitz.open()
+                tpage = textdoc.new_page(width=page.rect.width, height=page.rect.height)
+                try:
+                    tw.write_text(tpage, color=color)
+                except TypeError:
+                    tw.write_text(tpage, color=color)
+                clip_rect = fitz.Rect(rect)
+                try:
+                    page.show_pdf_page(
+                        clip_rect, textdoc, 0,
+                        overlay=True, keep_proportion=True,
+                        rotate=float(ang), clip=clip_rect
+                    )
+                finally:
+                    try:
+                        textdoc.close()
+                    except Exception:
+                        pass
+            except Exception as e:
+                if debug: print(f"[textwriter] rotated stamp failed, fallback unrotated: {e}")
+                try:
+                    tw.write_text(page)
+                except Exception as e2:
+                    if debug: print(f"[textwriter] write_text failed after fallback: {e2}")
+        else:
+            try:
+                tw.write_text(page)
+            except Exception as e:
+                if debug: print(f"[textwriter] write_text failed: {e}")
 
     if debug:
         print(f"[textwriter] drew ~{drawn} chars in {rect}")
@@ -384,7 +463,8 @@ def _insert_textbox(page, rect, text: str, *,
                     fontfile: Optional[Union[str, Path]] = None,
                     debug: bool = False,
                     prefer_textwriter: bool = False,
-                    force_line_draw: bool = False) -> int:
+                    force_line_draw: bool = False,
+                    rotate: Optional[float] = None) -> int:
     # If we absolutely need color+fontfile to apply, draw lines directly.
     if force_line_draw:
         return _draw_paragraph_lines(
@@ -396,13 +476,52 @@ def _insert_textbox(page, rect, text: str, *,
             debug=debug
         )
 
+    # If rotate is an arbitrary angle (not a multiple of 90), first try using
+    # the 'morph' matrix of insert_textbox to rotate around the rect center.
+    try:
+        if rotate is not None:
+            ang = float(rotate)
+            if int(round(ang)) % 90 != 0:
+                fitz = _import_fitz()
+                cx = float(rect.x0 + 0.5 * rect.width)
+                cy = float(rect.y0 + 0.5 * rect.height)
+                rad = (ang % 360.0) * math.pi / 180.0
+                c = math.cos(rad); s = math.sin(rad)
+                mat = fitz.Matrix(c, s, -s, c, 0, 0)
+                try:
+                    n = page.insert_textbox(
+                        rect, _sanitize_punct(text),
+                        fontsize=fontsize,
+                        color=color,
+                        fontname=(fontname or "helv"),
+                        fontfile=(str(fontfile) if fontfile else None),
+                        align=0,
+                        morph=(fitz.Point(cx, cy), mat)
+                    )
+                    if isinstance(n, (int, float)) and n >= 0:
+                        return int(n)
+                except Exception as e:
+                    if debug: print(f"[insert_textbox] morph rotate failed: {e}")
+                # Fallback to TextWriter stamping approach
+                return _draw_paragraph_textwriter(
+                    page, rect, _sanitize_punct(text),
+                    fontsize=fontsize, color=color,
+                    fontname=fontname, fontfile=str(fontfile) if fontfile else None,
+                    tightness=0.96, line_height_factor=1.18,
+                    debug=debug,
+                    rotate=ang
+                )
+    except Exception as e:
+        if debug: print(f"[insert_textbox] rotate handling error: {e}")
+
     if prefer_textwriter:
         return _draw_paragraph_textwriter(
             page, rect, _sanitize_punct(text),
             fontsize=fontsize, color=color,
             fontname=fontname, fontfile=str(fontfile) if fontfile else None,
             tightness=0.96, line_height_factor=1.18,
-            debug=debug
+            debug=debug,
+            rotate=rotate
         )
 
 
@@ -412,6 +531,7 @@ def _insert_textbox(page, rect, text: str, *,
             if color is not None: kw["color"] = color
             if use_name: kw["fontname"] = use_name
             if use_file is not None: kw["fontfile"] = str(use_file)
+            if rotate is not None: kw["rotate"] = float(rotate)
             n = page.insert_textbox(rect, txt, **kw)
             if debug:
                 print(f"[insert_textbox] attempt fs={fs} name={use_name} file={use_file} -> {n}")
@@ -421,6 +541,7 @@ def _insert_textbox(page, rect, text: str, *,
                 kw = {"fontsize": fs, "align": 0}
                 if color is not None: kw["color"] = color
                 if use_name: kw["fontname"] = use_name
+                if rotate is not None: kw["rotate"] = float(rotate)
                 n = page.insert_textbox(rect, txt, **kw)
                 if debug:
                     print(f"[insert_textbox] legacy attempt fs={fs} name={use_name} -> {n}")
@@ -795,6 +916,8 @@ def highlight_and_margin_comment_pdf(
     emit_callback=None,
     # Freeze mode: draw exactly given placements; skip search/auto-placement
     freeze_placements: Optional[List[NotePlacement]] = None,
+    note_rotations: Optional[Dict[str, float]] = None,
+    rotate_text_with_box: bool = False,
 ):
     """
     When plan_only=False (default):
@@ -953,22 +1076,63 @@ def highlight_and_margin_comment_pdf(
             else:
                 pos = fitz.Rect(*_rect_tuple(pl.note_rect))
 
-            # Draw box
-            _draw_note_box(page, pos, stroke_rgb=brd_rgb, fill_rgb=fill_rgb,
-                           width=note_border_width, opacity=note_opacity)
+            # Draw box (rotated if requested). Only draw if at least border or fill is specified.
+            rot = None
+            if note_rotations is not None:
+                try:
+                    rr = note_rotations.get(pl.uid)
+                    if rr is not None:
+                        rot = float(rr)
+                except Exception:
+                    rot = None
 
-            # Text
+            has_border = (brd_rgb is not None and (note_border_width or 0) > 0)
+            has_fill = (fill_rgb is not None)
+
+            if has_border or has_fill:
+                if rot is not None and abs((rot % 360.0)) > 0.5:
+                    _draw_rotated_rect(
+                        page, pos, rot,
+                        stroke_rgb=(brd_rgb if has_border else None),
+                        fill_rgb=(fill_rgb if has_fill else None),
+                        width=(note_border_width if has_border else 0.0),
+                        opacity=note_opacity,
+                    )
+                else:
+                    _draw_note_box(
+                        page, pos,
+                        stroke_rgb=(brd_rgb if has_border else None),
+                        fill_rgb=(fill_rgb if has_fill else None),
+                        width=(note_border_width if has_border else 0.0),
+                        opacity=note_opacity,
+                    )
+
+            # Text: by default keep unrotated; only rotate text if explicitly requested
             inner = pos + (note_padding, note_padding, -note_padding, -note_padding)
             tcol = per_highlight_color.get(getattr(pl, 'query', ''), txt_rgb)
-            _insert_textbox(
-                page, inner, str(getattr(pl, 'explanation', '')),
-                fontsize=note_fontsize,
-                color=tcol,
-                fontname=metric_fontname,
-                fontfile=note_fontfile,
-                debug=debug,
-                force_line_draw=True
-            )
+            if rot is not None and abs((rot % 360.0)) > 0.5 and bool(locals().get('rotate_text_with_box', False)):
+                # Use insert_textbox so rotation applies; avoid force_line_draw which ignores rotate
+                _insert_textbox(
+                    page, inner, str(getattr(pl, 'explanation', '')),
+                    fontsize=note_fontsize,
+                    color=tcol,
+                    fontname=None,
+                    fontfile=note_fontfile,
+                    debug=debug,
+                    prefer_textwriter=False,
+                    force_line_draw=False,
+                    rotate=rot,
+                )
+            else:
+                _insert_textbox(
+                    page, inner, str(getattr(pl, 'explanation', '')),
+                    fontsize=note_fontsize,
+                    color=tcol,
+                    fontname=None,
+                    fontfile=note_fontfile,
+                    debug=debug,
+                    force_line_draw=True,
+                )
 
             # Optional leader line to the anchor block edge
             if draw_leader and lead_rgb is not None and getattr(pl, 'anchor_rect', None):
@@ -1313,3 +1477,4 @@ if __name__ == "__main__":
         # debug=True,
     )
     print(f"Saved: {saved}  highlights={hi}  notes={notes}  skipped={skipped}")
+
