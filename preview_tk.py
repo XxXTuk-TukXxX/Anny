@@ -30,8 +30,8 @@ DEFAULT_ANNOTATION_SETTINGS = dict(
     allow_center_gutter=True,
     center_gutter_tolerance=48.0,
     dedupe_scope="page",
-    note_fontname="PatrickHand",
-    note_fontfile=r".\fonts\PatrickHand-Regular.ttf",
+    note_fontname="Roys-Regular",
+    note_fontfile=r".\fonts\Roys-Regular.ttf",
 )
 
 def _tk_color(c: Optional[str], default: str = "#ff9800") -> str:

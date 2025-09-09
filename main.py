@@ -29,8 +29,8 @@ if __name__ == "__main__":
         dedupe_scope="page",
 
         # Your font
-        note_fontname="PatrickHand",
-        note_fontfile=r".\fonts\PatrickHand-Regular.ttf",
+        note_fontname="Roys-Regular",
+        note_fontfile=r".\fonts\Roys-Regular.ttf",
 
         # Debug (to confirm fallback path)
         # debug=True,

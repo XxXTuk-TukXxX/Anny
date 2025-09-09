@@ -918,6 +918,9 @@ def highlight_and_margin_comment_pdf(
     freeze_placements: Optional[List[NotePlacement]] = None,
     note_rotations: Optional[Dict[str, float]] = None,
     rotate_text_with_box: bool = False,
+    # Per-note style overrides (by uid)
+    note_text_overrides: Optional[Dict[str, Union[str, Color]]] = None,
+    note_fontsize_overrides: Optional[Dict[str, float]] = None,
 ):
     """
     When plan_only=False (default):
@@ -1006,6 +1009,10 @@ def highlight_and_margin_comment_pdf(
         return parsed or default_hi
 
     per_highlight_color: Dict[str, Color] = {q: _resolve_hi(color_map_raw.get(q)) for q in qlist}
+
+    # Normalize override dicts
+    note_text_overrides = note_text_overrides or {}
+    note_fontsize_overrides = note_fontsize_overrides or {}
 
     pdf_path = Path(pdf_path)
     out_path = Path(out_path) if out_path else pdf_path.with_name(pdf_path.stem + "_annotated.pdf")
@@ -1109,12 +1116,26 @@ def highlight_and_margin_comment_pdf(
 
             # Text: by default keep unrotated; only rotate text if explicitly requested
             inner = pos + (note_padding, note_padding, -note_padding, -note_padding)
+            # Resolve text color and fontsize with per-note overrides
             tcol = per_highlight_color.get(getattr(pl, 'query', ''), txt_rgb)
+            try:
+                override_col = note_text_overrides.get(pl.uid)
+                if override_col is not None:
+                    tcol = _parse_color(override_col)
+            except Exception:
+                pass
+            fsize = note_fontsize
+            try:
+                ofsz = note_fontsize_overrides.get(pl.uid)
+                if ofsz is not None and float(ofsz) > 0:
+                    fsize = float(ofsz)
+            except Exception:
+                pass
             if rot is not None and abs((rot % 360.0)) > 0.5 and bool(locals().get('rotate_text_with_box', False)):
                 # Use insert_textbox so rotation applies; avoid force_line_draw which ignores rotate
                 _insert_textbox(
                     page, inner, str(getattr(pl, 'explanation', '')),
-                    fontsize=note_fontsize,
+                    fontsize=fsize,
                     color=tcol,
                     fontname=None,
                     fontfile=note_fontfile,
@@ -1126,7 +1147,7 @@ def highlight_and_margin_comment_pdf(
             else:
                 _insert_textbox(
                     page, inner, str(getattr(pl, 'explanation', '')),
-                    fontsize=note_fontsize,
+                    fontsize=fsize,
                     color=tcol,
                     fontname=None,
                     fontfile=note_fontfile,
@@ -1470,11 +1491,12 @@ if __name__ == "__main__":
         dedupe_scope="page",
 
         # Your font
-        note_fontname="PatrickHand",
-        note_fontfile=r".\fonts\PatrickHand-Regular.ttf",
+        note_fontname="Roys-Regular",
+        note_fontfile=r".\fonts\Roys-Regular.ttf",
 
         # Debug (to confirm fallback path)
         # debug=True,
     )
     print(f"Saved: {saved}  highlights={hi}  notes={notes}  skipped={skipped}")
+
 

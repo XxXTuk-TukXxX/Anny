@@ -20,7 +20,7 @@ from typing import Dict, Tuple, List, Optional
 import math
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, colorchooser
 
 # --- BACKEND (OCR) ---
 import ocrmypdf
@@ -158,8 +158,8 @@ DEFAULTS = {
     "allow_center_gutter": True,
     "center_gutter_tolerance": 48.0,
     "dedupe_scope": "page",
-    "note_fontname": "PatrickHand",
-    "note_fontfile": r".\fonts\PatrickHand-Regular.ttf",
+    "note_fontname": "Roys-Regular",
+    "note_fontfile": r".\fonts\Roys-Regular.ttf",
 }
 
 SCALE = 1.5
@@ -183,6 +183,9 @@ class WizardApp(tk.Tk):
         self.rotation_overrides: Dict[str, float] = {}  # uid -> degrees
         self.placements = []  # plan-only placements
         self.color_map: Dict[str, str] = {}
+        # Per-note style overrides
+        self.note_text_overrides: Dict[str, str] = {}
+        self.note_fontsize_overrides: Dict[str, float] = {}
 
         # Preview doc state (temp annotated PDF)
         self._preview_pdf_path: Optional[str] = None
@@ -459,7 +462,7 @@ class WizardApp(tk.Tk):
             allow_center_gutter=bool(self.center_gutter_var.get()),
             center_gutter_tolerance=float(self.center_tol_var.get()),
             dedupe_scope="page",
-            note_fontname=self.fontname_var.get().strip() or "PatrickHand",
+            note_fontname=self.fontname_var.get().strip() or "Roys-Regular",
             note_fontfile=self.fontfile_var.get().strip() or None,
         )
 
@@ -616,6 +619,8 @@ class WizardApp(tk.Tk):
             freeze_placements=self.placements,
             note_rotations=self.rotation_overrides,
             rotate_text_with_box=True,
+            note_text_overrides=self.note_text_overrides,
+            note_fontsize_overrides=self.note_fontsize_overrides,
             **settings,
         )
 
@@ -1291,9 +1296,51 @@ class WizardApp(tk.Tk):
         except Exception:
             pass
 
+        # Top toolbar for text style
+        toolbar = ttk.Frame(top)
+        toolbar.pack(fill="x", padx=8, pady=(8, 4))
+
+        # Resolve current defaults for this note
+        try:
+            base_color = self.note_text_overrides.get(uid)
+            if not base_color:
+                # Prefer per-query color map if available, else global text color
+                base_color = self.color_map.get(getattr(pl, 'query', ''), self.note_text_var.get() or 'black')
+        except Exception:
+            base_color = self.note_text_var.get() or 'black'
+        try:
+            base_size = float(self.note_fontsize_overrides.get(uid)) if uid in self.note_fontsize_overrides else float(self.fontsize_var.get())
+        except Exception:
+            base_size = float(DEFAULTS.get('note_fontsize', 9.0))
+
+        color_var = tk.StringVar(value=base_color)
+        size_var = tk.DoubleVar(value=base_size)
+
+        def pick_color():
+            try:
+                _, hx = colorchooser.askcolor(color=color_var.get() or '#000000', title='Pick text color')
+                if hx:
+                    color_var.set(hx)
+                    try:
+                        swatch.configure(bg=hx)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        ttk.Label(toolbar, text="Text color:").pack(side="left")
+        ttk.Button(toolbar, text="Pick...", command=pick_color).pack(side="left", padx=(4, 6))
+        # Small swatch to preview color
+        swatch = tk.Label(toolbar, text="  ", bg=base_color if base_color else '#000000', relief='solid', width=2)
+        swatch.pack(side="left", padx=(0, 12))
+
+        ttk.Label(toolbar, text="Font size:").pack(side="left")
+        sz = tk.Spinbox(toolbar, from_=6, to=72, increment=1, textvariable=size_var, width=5)
+        sz.pack(side="left", padx=(4, 0))
+
         txt = tk.Text(top, wrap="word", width=64, height=12)
         txt.insert("1.0", getattr(pl, 'explanation', ""))
-        txt.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        txt.pack(fill="both", expand=True, padx=8, pady=(4, 4))
 
         btns = ttk.Frame(top)
         btns.pack(fill="x", padx=8, pady=(0, 8))
@@ -1308,6 +1355,19 @@ class WizardApp(tk.Tk):
                     setattr(pl, 'explanation', new_text)
                 except Exception:
                     pass
+            # Persist per-note style overrides
+            try:
+                col = (color_var.get() or '').strip()
+                if col:
+                    self.note_text_overrides[uid] = col
+            except Exception:
+                pass
+            try:
+                fs = float(size_var.get())
+                if fs > 0:
+                    self.note_fontsize_overrides[uid] = fs
+            except Exception:
+                pass
             top.destroy()
             # Rebuild preview to reflect text change when frozen
             self._refresh_preview()
@@ -1354,6 +1414,8 @@ class WizardApp(tk.Tk):
                 freeze_placements=self.placements,
                 note_rotations=self.rotation_overrides,
                 rotate_text_with_box=True,
+                note_text_overrides=self.note_text_overrides,
+                note_fontsize_overrides=self.note_fontsize_overrides,
                 **settings,
             )
         except Exception as e:
