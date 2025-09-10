@@ -113,6 +113,15 @@ except Exception as e:
         f"Import error: {e}"
     )
 
+# --- Optional: Gemini annotator integration ---
+_GEMINI_AVAILABLE = True
+_GEMINI_IMPORT_ERR = None
+try:
+    from models.gemini_annotaton import annotate_txt_file as gemini_annotate
+except Exception as _e:
+    _GEMINI_AVAILABLE = False
+    _GEMINI_IMPORT_ERR = str(_e)
+
 
 # --- HELPERS: JSON color map for UI rectangle outlines ---
 def _tk_color(s: Optional[str], default: str = "#ff9800") -> str:
@@ -186,6 +195,14 @@ class WizardApp(tk.Tk):
         # Per-note style overrides
         self.note_text_overrides: Dict[str, str] = {}
         self.note_fontsize_overrides: Dict[str, float] = {}
+        # Annotation source state
+        self.ann_source_var = tk.StringVar(value="json")  # 'json' or 'gemini'
+        # Gemini-specific inputs
+        self.g_txt_var = tk.StringVar()
+        self.g_objective_var = tk.StringVar()
+        self.g_model_var = tk.StringVar(value="gemini-2.5-flash")
+        self.g_max_items_var = tk.IntVar(value=12)
+        self.g_outfile_var = tk.StringVar()
 
         # Preview doc state (temp annotated PDF)
         self._preview_pdf_path: Optional[str] = None
@@ -340,11 +357,45 @@ class WizardApp(tk.Tk):
         pad = {"padx": 8, "pady": 4}
         row = 0
 
-        tk.Label(self.step2, text="Annotations JSON:").grid(row=row, column=0, sticky="e", **pad)
-        self.json_var = tk.StringVar()
-        tk.Entry(self.step2, textvariable=self.json_var, width=80).grid(row=row, column=1, **pad)
-        ttk.Button(self.step2, text="Browse...", command=self._browse_json).grid(row=row, column=2, **pad)
+        # Source chooser
+        srcf = ttk.Frame(self.step2)
+        srcf.grid(row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 0))
+        ttk.Label(srcf, text="Annotation source:").pack(side="left")
+        ttk.Radiobutton(srcf, text="JSON file", value="json", variable=self.ann_source_var,
+                        command=self._update_ann_source_ui).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(srcf, text="Gemini AI", value="gemini", variable=self.ann_source_var,
+                        command=self._update_ann_source_ui).pack(side="left", padx=(8, 0))
+        if not _GEMINI_AVAILABLE:
+            ttk.Label(srcf, text="(Gemini unavailable: install google-genai, set GOOGLE_API_KEY)", foreground="gray").pack(side="left", padx=(12, 0))
         row += 1
+
+        # JSON source panel
+        self.json_panel = ttk.Frame(self.step2)
+        self.json_panel.grid(row=row, column=0, columnspan=3, sticky="we")
+        tk.Label(self.json_panel, text="Annotations JSON:").grid(row=0, column=0, sticky="e", **pad)
+        self.json_var = tk.StringVar()
+        tk.Entry(self.json_panel, textvariable=self.json_var, width=80).grid(row=0, column=1, **pad)
+        ttk.Button(self.json_panel, text="Browse...", command=self._browse_json).grid(row=0, column=2, **pad)
+
+        # Gemini source panel
+        self.gemini_panel = ttk.LabelFrame(self.step2, text="Gemini annotator")
+        self.gemini_panel.grid(row=row, column=0, columnspan=3, sticky="we", padx=8)
+        # No TXT selection; extraction happens automatically from current PDF
+        ttk.Label(self.gemini_panel, text="Objective:").grid(row=0, column=0, sticky="e", **pad)
+        tk.Entry(self.gemini_panel, textvariable=self.g_objective_var, width=70).grid(row=0, column=1, columnspan=2, sticky="w", **pad)
+        # Model & count
+        ttk.Label(self.gemini_panel, text="Model:").grid(row=1, column=0, sticky="e", **pad)
+        tk.Entry(self.gemini_panel, textvariable=self.g_model_var, width=28).grid(row=1, column=1, sticky="w", **pad)
+        ttk.Label(self.gemini_panel, text="Max items:").grid(row=1, column=2, sticky="e", **pad)
+        tk.Spinbox(self.gemini_panel, from_=1, to=50, textvariable=self.g_max_items_var, width=6).grid(row=1, column=3, sticky="w", **pad)
+        # Output JSON
+        ttk.Label(self.gemini_panel, text="Output annotations JSON:").grid(row=2, column=0, sticky="e", **pad)
+        tk.Entry(self.gemini_panel, textvariable=self.g_outfile_var, width=70).grid(row=2, column=1, **pad)
+        ttk.Button(self.gemini_panel, text="Save As...", command=self._browse_gemini_outfile).grid(row=2, column=2, **pad)
+        ttk.Button(self.gemini_panel, text="Run Gemini", command=self._run_gemini_clicked).grid(row=2, column=3, padx=8)
+
+        row += 1
+        self._update_ann_source_ui()
 
         # Font controls
         tk.Label(self.step2, text="Font name:").grid(row=row, column=0, sticky="e", **pad)
@@ -434,10 +485,101 @@ class WizardApp(tk.Tk):
             self.json_var.set(p)
             self.ann_json = p
 
+    def _update_ann_source_ui(self):
+        mode = self.ann_source_var.get()
+        try:
+            if mode == "json":
+                self.json_panel.grid()  # show
+                self.gemini_panel.grid_remove()
+            else:
+                self.gemini_panel.grid()  # show
+                self.json_panel.grid_remove()
+        except Exception:
+            pass
+
     def _browse_font(self):
         p = filedialog.askopenfilename(title="Choose TTF/OTF font file", filetypes=[("Font files", "*.ttf *.otf"), ("All files", "*.*")])
         if p:
             self.fontfile_var.set(p)
+
+    # --- Gemini helpers ---
+    def _browse_gemini_outfile(self):
+        p = filedialog.asksaveasfilename(title="Save annotations JSON as...", defaultextension=".json", filetypes=[("JSON files", "*.json")])
+        if p:
+            self.g_outfile_var.set(p)
+
+    def _extract_pdf_text_to_temp(self) -> Optional[str]:
+        pdf_path = self.ocr_pdf or self.src_pdf
+        if not pdf_path:
+            messagebox.showwarning("No PDF", "Choose or generate a PDF in Step 1.")
+            return None
+        try:
+            doc = self.fitz.open(pdf_path)
+            parts = []
+            for pg in doc:
+                try:
+                    parts.append(pg.get_text("text"))
+                except Exception:
+                    parts.append(pg.get_text())
+            doc.close()
+            fd, tmp = tempfile.mkstemp(suffix="_gemini_src.txt")
+            os.close(fd)
+            Path(tmp).write_text("\n\n".join(parts), encoding="utf-8")
+            return tmp
+        except Exception as e:
+            messagebox.showerror("Extract failed", f"{type(e).__name__}: {e}")
+            return None
+
+    def _run_gemini_clicked(self):
+        if not _GEMINI_AVAILABLE:
+            msg = "Gemini annotator not available. Install google-genai and set GOOGLE_API_KEY (or GEMINI_API_KEY)."
+            if _GEMINI_IMPORT_ERR:
+                msg += f"\nImport error: {_GEMINI_IMPORT_ERR}"
+            messagebox.showerror("Gemini unavailable", msg)
+            return
+        # Ensure we have text extracted from the current PDF (no manual TXT selection)
+        txt_path = (self.g_txt_var.get() or "").strip()
+        objective = (self.g_objective_var.get() or "").strip()
+        model = (self.g_model_var.get() or "gemini-2.5-flash").strip()
+        max_items = int(self.g_max_items_var.get() or 12)
+        if not txt_path or not Path(txt_path).exists():
+            tmp_txt = self._extract_pdf_text_to_temp()
+            if not tmp_txt:
+                return
+            txt_path = tmp_txt
+            self.g_txt_var.set(txt_path)
+        if not objective:
+            messagebox.showwarning("Missing objective", "Please enter an annotation objective.")
+            return
+        outfile = (self.g_outfile_var.get() or "").strip()
+        if not outfile:
+            # Default next to the current PDF with a clear suffix
+            pdf_path = self.ocr_pdf or self.src_pdf
+            if pdf_path:
+                outfile = str(Path(pdf_path).with_suffix("")) + "__annotations.json"
+            else:
+                outfile = str(Path(txt_path).with_suffix("")) + "__annotations.json"
+            self.g_outfile_var.set(outfile)
+        try:
+            # Run Gemini and write JSON
+            gemini_annotate(
+                txt_path=txt_path,
+                objective=objective,
+                outfile=outfile,
+                model=model,
+                max_items_hint=max_items,
+            )
+        except Exception as e:
+            messagebox.showerror("Gemini failed", f"{type(e).__name__}: {e}")
+            return
+        # Point the UI to the produced JSON file
+        self.json_var.set(outfile)
+        self.ann_json = outfile
+        try:
+            self.color_map = build_color_map(self.ann_json, fallback="#ff9800")
+        except Exception:
+            pass
+        messagebox.showinfo("Done", f"Generated annotations JSON:\n{outfile}")
 
     def _gather_settings(self):
         def none_if_empty(s: str | None):
@@ -470,8 +612,15 @@ class WizardApp(tk.Tk):
         if not (self.ocr_pdf or self.src_pdf):
             messagebox.showwarning("No PDF", "Choose or generate a PDF in Step 1.")
             return
-        if not self.json_var.get().strip():
+        # Ensure annotations input available based on selected source
+        if self.ann_source_var.get() == "gemini" and not self.json_var.get().strip():
+            # Auto-run Gemini to generate annotations from current PDF
+            self._run_gemini_clicked()
+        if self.ann_source_var.get() == "json" and not self.json_var.get().strip():
             messagebox.showwarning("No JSON", "Choose annotations JSON.")
+            return
+        if not self.json_var.get().strip():
+            # Gemini run may have failed or been canceled
             return
 
         pdf_path = self.ocr_pdf or self.src_pdf

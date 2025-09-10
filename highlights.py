@@ -476,6 +476,16 @@ def _insert_textbox(page, rect, text: str, *,
             debug=debug
         )
 
+    # Try to register the provided font file with an alias so insert_textbox
+    # can reliably use it across PyMuPDF versions (some ignore fontfile).
+    alias = None
+    try:
+        if fontfile:
+            doc = getattr(page, "parent", None)
+            alias = _register_font_alias(doc, page, fontfile, alias="patrick_hand")
+    except Exception:
+        alias = None
+
     # If rotate is an arbitrary angle (not a multiple of 90), first try using
     # the 'morph' matrix of insert_textbox to rotate around the rect center.
     try:
@@ -493,8 +503,10 @@ def _insert_textbox(page, rect, text: str, *,
                         rect, _sanitize_punct(text),
                         fontsize=fontsize,
                         color=color,
-                        fontname=(fontname or "helv"),
-                        fontfile=(str(fontfile) if fontfile else None),
+                        # Prefer the registered alias when available; otherwise provided name
+                        fontname=(alias or fontname or "helv"),
+                        # If alias was registered, avoid passing fontfile to prevent overrides
+                        fontfile=(None if alias else (str(fontfile) if fontfile else None)),
                         align=0,
                         morph=(fitz.Point(cx, cy), mat)
                     )
@@ -549,11 +561,12 @@ def _insert_textbox(page, rect, text: str, *,
             except TypeError:
                 return page.insertTextbox(rect, txt, fontsize=fs)
 
-    n = _try_draw(text, fontsize, fontname, fontfile)
+    # Prefer the alias (if any) for standard insert_textbox as well
+    n = _try_draw(text, fontsize, (alias or fontname), (None if alias else fontfile))
     if isinstance(n, (int, float)) and n > 0:
         return int(n)
 
-    n = _try_draw(_sanitize_punct(text), fontsize, fontname, fontfile)
+    n = _try_draw(_sanitize_punct(text), fontsize, (alias or fontname), (None if alias else fontfile))
     if isinstance(n, (int, float)) and n > 0:
         return int(n)
 
