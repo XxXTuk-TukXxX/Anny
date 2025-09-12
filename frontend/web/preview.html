@@ -25,6 +25,9 @@
     #imgPage { z-index: 10; pointer-events: none; }
     #textLayer { z-index: 20; pointer-events: none; }
     #overlay { z-index: 30; pointer-events: auto; }
+    .resize-handle { position:absolute; width:10px; height:10px; right:-6px; bottom:-6px; background:#fff; border:2px solid #111; border-radius:3px; cursor: nwse-resize; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; }
+    .modal { background:#fff; border-radius: .5rem; width: min(680px, 96vw); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
   </style>
 
   <!-- PDF.js (optional; we guard usage if it fails to load) -->
@@ -72,6 +75,9 @@
         <button id="refreshBtn" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
           <span class="material-symbols-outlined text-base">refresh</span> Refresh preview
         </button>
+        <button id="legacyBtn" title="Open legacy Tk preview" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
+          <span class="material-symbols-outlined text-base">open_in_new</span> Legacy preview (Tk)
+        </button>
       </div>
 
       <div class="mx-2 h-6 w-px bg-gray-200"></div>
@@ -88,12 +94,32 @@
 
       <div class="mx-2 h-6 w-px bg-gray-200"></div>
 
+      <!-- Selected note styling -->
+      <div class="flex items-center gap-2 text-sm">
+        <span>Selected style:</span>
+        <label class="inline-flex items-center gap-2">
+          <span>Color</span>
+          <input id="colorInput" type="color" value="#ff9800" class="h-8 w-10 rounded border border-gray-300"/>
+        </label>
+        <label class="inline-flex items-center gap-2">
+          <span>Font</span>
+          <input id="fontSizeInput" type="number" min="6" step="0.5" value="9" class="w-20 rounded-md border-gray-300 py-1 text-sm"/>
+          <span>pt</span>
+        </label>
+        <button id="applyStyleBtn" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">Apply</button>
+      </div>
+
+      <div class="mx-2 h-6 w-px bg-gray-200"></div>
+
       <div class="flex items-center gap-2 text-sm">
         <span>Export to:</span>
         <input id="exportPath" type="text" class="w-64 rounded-md border-gray-300 py-2 text-sm" value="annotated.pdf" />
         <button id="browseBtn" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">Browse…</button>
         <button id="exportBtn" class="inline-flex items-center gap-2 rounded-md bg-[var(--primary-color)] px-4 py-2 text-sm font-semibold text-white hover:bg-opacity-90">
           <span class="material-symbols-outlined text-base">picture_as_pdf</span> Export PDF
+        </button>
+        <button id="debugBtn" class="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
+          <span class="material-symbols-outlined text-base">bug_report</span> Debug
         </button>
       </div>
 
@@ -107,10 +133,27 @@
       <div class="mx-auto max-w-7xl p-4">
         <div id="canvasWrap" class="relative mx-auto flex min-h-[70vh] items-center justify-center rounded-xl bg-gray-900 shadow ring-1 ring-gray-800">
           <!-- Canvas + text layer -->
-          <canvas id="pdfCanvas" class="max-w-full rounded-lg shadow-lg"></canvas>
-          <div id="textLayer" class="absolute inset-0 pointer-events-none"></div>
-          <div id="overlay" class="absolute inset-0"></div>
-          <img id="imgPage" class="absolute inset-0 m-auto hidden rounded-lg shadow-lg" alt="PDF page"/>
+          <canvas id="pdfCanvas" class="max-w-full rounded-lg shadow-lg" style="z-index:10;"></canvas>
+          <div id="textLayer" class="absolute pointer-events-none" style="z-index:20;"></div>
+          <div id="overlay" class="absolute" style="z-index:30; pointer-events:auto;"></div>
+          <img id="imgPage" class="absolute inset-0 m-auto hidden rounded-lg shadow-lg" style="z-index:10; pointer-events:none;" alt="PDF page"/>
+        </div>
+        
+        <!-- Edit text modal -->
+        <div id="editModal" class="modal-backdrop">
+          <div class="modal">
+            <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+              <h2 class="text-sm font-semibold">Edit note text</h2>
+              <button id="editClose" class="text-gray-500 hover:text-gray-900"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div class="p-4">
+              <textarea id="editText" class="w-full h-48 rounded border border-gray-300 p-2 text-sm" placeholder="Enter note text..."></textarea>
+            </div>
+            <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-4 py-3">
+              <button id="editCancel" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm">Cancel</button>
+              <button id="editSave" class="rounded-md bg-[var(--primary-color)] px-3 py-2 text-sm font-semibold text-white">Save</button>
+            </div>
+          </div>
         </div>
         <!-- Removed iframe fallback in favor of rasterized images via backend -->
       </div>
@@ -198,6 +241,7 @@
     }
 
     async function loadDocument(url) {
+      try { console.log('[preview] loadDocument', (url||'').slice(0, 64)); } catch {}
       try {
         if (hasPdfJs) {
           canvasWrap.classList.remove('hidden');
@@ -237,10 +281,14 @@
       const w = canvasWrap.clientWidth - 32;
       const h = Math.max(300, window.innerHeight * 0.75);
       const res = await window.pywebview.api.render_preview_page(pageNum - 1, Math.max(200, w), Math.max(200, h));
+      console.log('[preview] renderFallbackPage', { pageNum, res });
       imgPage.src = res.data_url;
       imgPage.style.width = res.width_px + 'px';
       imgPage.style.height = res.height_px + 'px';
       imgPage.classList.remove('hidden');
+      // Ensure overlay sits above and is interactive even if CSS fails to load
+      overlay.style.zIndex = '30';
+      overlay.style.pointerEvents = 'auto';
       // Size overlay to match
       overlay.style.width = res.width_px + 'px';
       overlay.style.height = res.height_px + 'px';
@@ -271,22 +319,42 @@
       const renderContext = { canvasContext: ctx, viewport: vp };
       await page.render(renderContext).promise;
 
+      // Position overlay and text layer to align with the rendered canvas
+      // so hit-testing/dragging match the page location even when the
+      // canvas is centered within its container.
+      if (overlay) {
+        overlay.style.width = vp.width + 'px';
+        overlay.style.height = vp.height + 'px';
+        overlay.style.left = '50%';
+        overlay.style.top = '50%';
+        overlay.style.transform = 'translate(-50%, -50%)';
+        overlay.style.zIndex = '30';
+        overlay.style.pointerEvents = 'auto';
+      }
+
       // Optional text layer (selection/search visuals)
       const textLayerDiv = document.getElementById('textLayer');
-      textLayerDiv.innerHTML = ''; // clear
-      const textContent = await page.getTextContent();
-      pdfjsLib.renderTextLayer({
-        textContentSource: textContent,
-        container: textLayerDiv,
-        viewport: vp,
-      });
+      if (textLayerDiv) {
+        textLayerDiv.innerHTML = ''; // clear
+        textLayerDiv.style.width = vp.width + 'px';
+        textLayerDiv.style.height = vp.height + 'px';
+        textLayerDiv.style.left = '50%';
+        textLayerDiv.style.top = '50%';
+        textLayerDiv.style.transform = 'translate(-50%, -50%)';
+        const textContent = await page.getTextContent();
+        pdfjsLib.renderTextLayer({
+          textContentSource: textContent,
+          container: textLayerDiv,
+          viewport: vp,
+        });
+      }
 
       isRendering = false;
       if (pendingPage !== null) {
         const p = pendingPage; pendingPage = null; renderPage(p);
       }
       setPageInfo();
-      try { drawOverlay(num, vp.width, vp.height, null); } catch (e) {}
+      try { drawOverlay(num, vp.width, vp.height, null); } catch (e) { console.error(e); }
     }
 
     function queueRender(num) {
@@ -313,6 +381,14 @@
 
     document.getElementById('refreshBtn').addEventListener('click', async () => {
       await refreshPreview();
+    });
+
+    document.getElementById('legacyBtn').addEventListener('click', async () => {
+      if (window.pywebview?.api?.open_legacy_preview) {
+        try { await window.pywebview.api.open_legacy_preview(); } catch {}
+      } else {
+        alert('Legacy preview is only available in desktop app mode.');
+      }
     });
 
     document.getElementById('freezeToggle').addEventListener('change', (e) => {
@@ -342,6 +418,47 @@
       }
     });
 
+    // Apply style to selected
+    document.getElementById('applyStyleBtn').addEventListener('click', async () => {
+      if (!selectedUid) { alert('Select a note first.'); return; }
+      const color = document.getElementById('colorInput').value;
+      const fsz = parseFloat(document.getElementById('fontSizeInput').value || '0');
+      try {
+        if (window.pywebview?.api?.set_note_color && color) {
+          await window.pywebview.api.set_note_color(selectedUid, color);
+          // Update outline immediately
+          const el = overlay.querySelector('[data-uid="'+selectedUid+'"]');
+          if (el) el.style.borderColor = color;
+        }
+        if (window.pywebview?.api?.set_note_fontsize && fsz > 0) {
+          await window.pywebview.api.set_note_fontsize(selectedUid, fsz);
+        }
+        if (document.getElementById('autoToggle')?.checked) {
+          await refreshPreview();
+        }
+      } catch (e) { console.error(e); }
+    });
+
+    // Debug button: show backend + overlay state
+    const debugBtn = document.getElementById('debugBtn');
+    if (debugBtn) {
+      debugBtn.addEventListener('click', async () => {
+        try {
+          const state = window.pywebview?.api?.debug_dump_state ? await window.pywebview.api.debug_dump_state() : {};
+          const meta = overlayMeta || {};
+          const info = {
+            pageNum,
+            hasPdfJs,
+            overlay: { pages: meta.pages?.length || 0, placements: meta.placements?.length || 0 },
+            backend: state,
+          };
+          alert('Debug info:\n' + JSON.stringify(info, null, 2));
+        } catch (e) {
+          alert('Debug failed: ' + (e?.message||e));
+        }
+      });
+    }
+
     // Keyboard shortcuts
     window.addEventListener('keydown', (e) => {
       if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
@@ -365,7 +482,14 @@
         // Avoid cache-busting for data URLs
         const finalUrl = url.startsWith('data:') ? url : (url + (url.includes('?') ? '&' : '?') + '_=' + Date.now());
         await loadDocument(finalUrl);
+        // Load overlay meta after document is ready, then re-render so overlay draws
         await loadOverlayMeta();
+        try { console.log('[preview] overlayMeta', { pages: overlayMeta?.pages?.length || 0, placements: overlayMeta?.placements?.length || 0 }); } catch {}
+        if (hasPdfJs && pdfDoc) {
+          queueRender(pageNum);
+        } else {
+          await renderFallbackPage(pageNum);
+        }
       } catch (e) {
         console.error(e);
         try {
@@ -388,6 +512,8 @@
           cb.checked = !!on; cb.dispatchEvent(new Event('change'));
         }
       } catch {}
+      window.addEventListener('error', (e) => console.error('[preview] window error', e?.message, e?.error));
+      window.addEventListener('unhandledrejection', (e) => console.error('[preview] unhandled', e?.reason));
     })();
 
     // If the bridge becomes ready later, try to refresh from the real source
@@ -397,14 +523,33 @@
 
     // -------- Overlay logic (drag + edit) --------
     let overlayMeta = null;
-    async function loadOverlayMeta() {
-      try {
-        if (window.pywebview?.api?.get_preview_meta) {
-          overlayMeta = await window.pywebview.api.get_preview_meta();
+    // Robustly fetch overlay meta, waiting briefly for the desktop bridge
+    async function getPreviewMeta() {
+      const tryApi = async () => {
+        try {
+          if (window.pywebview?.api?.get_preview_meta) {
+            return await window.pywebview.api.get_preview_meta();
+          }
+        } catch (e) {
+          // fall through to retry
         }
-      } catch (e) {
-        overlayMeta = null;
+        return null;
+      };
+
+      let meta = await tryApi();
+      if (!meta) {
+        const start = Date.now();
+        while (Date.now() - start < 2500) { // wait up to 2.5s for injection
+          await new Promise(r => setTimeout(r, 150));
+          meta = await tryApi();
+          if (meta) break;
+        }
       }
+      return meta;
+    }
+
+    async function loadOverlayMeta() {
+      overlayMeta = await getPreviewMeta();
     }
 
     function px(n) { return Math.round(n) + 'px'; }
@@ -434,61 +579,121 @@
         el.style.borderColor = p.color || '#ff9800';
         el.style.left = px(x0 * sx); el.style.top = px(y0 * sy);
         el.style.width = px((x1 - x0) * sx); el.style.height = px((y1 - y0) * sy);
-        el.dataset.uid = p.uid;
-        el.title = 'Drag to move. Double-click to edit text.';
-
-        // Selection highlight
-        el.addEventListener('click', () => {
-          selectedUid = p.uid;
-          Array.from(overlay.children).forEach(ch => ch.style.outline = '');
-          el.style.outline = '2px dashed #fff';
-        });
-
-        // Drag handling (move only)
-        let startX=0, startY=0, orig={x0, y0, x1, y1}, dragging=false;
-        el.addEventListener('mousedown', (e) => {
-          if (isFrozen()) return; // disabled when frozen
-          dragging = true;
-          startX = e.clientX; startY = e.clientY;
-          orig = { x0, y0, x1, y1 };
-          e.preventDefault();
-        });
-        window.addEventListener('mousemove', (e) => {
-          if (!dragging) return;
-          const dx = (e.clientX - startX) / sx;
-          const dy = (e.clientY - startY) / sy;
-          const nx0 = orig.x0 + dx, ny0 = orig.y0 + dy, nx1 = orig.x1 + dx, ny1 = orig.y1 + dy;
-          el.style.left = px(nx0 * sx); el.style.top = px(ny0 * sy);
-          x0 = nx0; y0 = ny0; x1 = nx1; y1 = ny1;
-        });
-        window.addEventListener('mouseup', async () => {
-          if (!dragging) return; dragging = false;
-          try {
-            if (window.pywebview?.api?.set_note_rect) {
-              await window.pywebview.api.set_note_rect(p.uid, x0, y0, x1, y1);
-            }
-            // auto-refresh if enabled
-            if (document.getElementById('autoToggle')?.checked) {
-              await refreshPreview();
-            }
-          } catch {}
-        });
-
-        // Edit text
-        el.addEventListener('dblclick', async () => {
-          const val = prompt('Edit note text:', p.explanation || '');
-          if (val == null) return;
-          try {
-            if (window.pywebview?.api?.set_note_text) {
-              await window.pywebview.api.set_note_text(p.uid, val);
-              await refreshPreview();
-            }
-          } catch {}
-        });
-
+        el.setAttribute('data-uid', p.uid);
+        el.setAttribute('data-x0', String(x0));
+        el.setAttribute('data-y0', String(y0));
+        el.setAttribute('data-x1', String(x1));
+        el.setAttribute('data-y1', String(y1));
+        el.setAttribute('data-sx', String(sx));
+        el.setAttribute('data-sy', String(sy));
+        el.setAttribute('title', 'Drag to move. Double-click to edit text. Use corner handle to resize.');
+        // Resize handle
+        const h = document.createElement('div');
+        h.className = 'resize-handle';
+        h.setAttribute('data-role', 'resize');
+        el.appendChild(h);
         overlay.appendChild(el);
       });
     }
+
+    // Selection, dragging, editing via delegation
+    let dragState = null;
+    overlay.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-uid]');
+      if (!t) return;
+      selectedUid = t.getAttribute('data-uid');
+      Array.from(overlay.children).forEach(ch => ch.style.outline = '');
+      t.style.outline = '2px dashed #fff';
+    });
+
+    // Modal helpers
+    const $modal = document.getElementById('editModal');
+    const $editText = document.getElementById('editText');
+    const $editSave = document.getElementById('editSave');
+    const $editCancel = document.getElementById('editCancel');
+    const $editClose = document.getElementById('editClose');
+    function showModal() { $modal.style.display = 'flex'; }
+    function hideModal() { $modal.style.display = 'none'; }
+
+    overlay.addEventListener('dblclick', async (e) => {
+      const t = e.target.closest('[data-uid]');
+      if (!t) return;
+      const uid = t.getAttribute('data-uid');
+      const p = (overlayMeta?.placements || []).find(x => x.uid === uid);
+      $editText.value = (p && p.explanation) || '';
+      showModal();
+      $editSave.onclick = async () => {
+        const val = $editText.value;
+        hideModal();
+        try {
+          if (window.pywebview?.api?.set_note_text) {
+            await window.pywebview.api.set_note_text(uid, val);
+            await refreshPreview();
+          }
+        } catch {}
+      };
+      const cancel = () => { hideModal(); };
+      $editCancel.onclick = cancel; $editClose.onclick = cancel; $modal.addEventListener('click', (ev) => { if (ev.target === $modal) hideModal(); }, { once:true });
+    });
+
+    overlay.addEventListener('mousedown', (e) => {
+      if (isFrozen()) return;
+      const t = e.target.closest('[data-uid]');
+      if (!t) return;
+      const onHandle = !!e.target.closest('[data-role="resize"]');
+      const uid = t.getAttribute('data-uid');
+      const sx = parseFloat(t.getAttribute('data-sx') || '1');
+      const sy = parseFloat(t.getAttribute('data-sy') || '1');
+      const x0 = parseFloat(t.getAttribute('data-x0') || '0');
+      const y0 = parseFloat(t.getAttribute('data-y0') || '0');
+      const x1 = parseFloat(t.getAttribute('data-x1') || '0');
+      const y1 = parseFloat(t.getAttribute('data-y1') || '0');
+      dragState = { el: t, uid, sx, sy, x0, y0, x1, y1, startX: e.clientX, startY: e.clientY, mode: (onHandle ? 'resize' : 'move') };
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!dragState) return;
+      const { el, sx, sy, startX, startY, x0, y0, x1, y1, mode } = dragState;
+      const dx = (e.clientX - startX) / sx;
+      const dy = (e.clientY - startY) / sy;
+      if (mode === 'resize') {
+        // Keep top-left fixed, move bottom-right
+        const nx1 = Math.max(x0 + 10, x1 + dx);
+        const ny1 = Math.max(y0 + 10, y1 + dy);
+        el.style.width = px((nx1 - x0) * sx);
+        el.style.height = px((ny1 - y0) * sy);
+        el.setAttribute('data-x1', String(nx1));
+        el.setAttribute('data-y1', String(ny1));
+      } else {
+        const nx0 = x0 + dx, ny0 = y0 + dy, nx1 = x1 + dx, ny1 = y1 + dy;
+        el.style.left = px(nx0 * sx); el.style.top = px(ny0 * sy);
+        el.setAttribute('data-x0', String(nx0));
+        el.setAttribute('data-y0', String(ny0));
+        el.setAttribute('data-x1', String(nx1));
+        el.setAttribute('data-y1', String(ny1));
+      }
+    });
+
+    window.addEventListener('mouseup', async () => {
+      if (!dragState) return;
+      const { uid, x0, y0, x1, y1 } = {
+        uid: dragState.uid,
+        x0: parseFloat(dragState.el.getAttribute('data-x0') || '0'),
+        y0: parseFloat(dragState.el.getAttribute('data-y0') || '0'),
+        x1: parseFloat(dragState.el.getAttribute('data-x1') || '0'),
+        y1: parseFloat(dragState.el.getAttribute('data-y1') || '0'),
+      };
+      dragState = null;
+      try {
+        if (window.pywebview?.api?.set_note_rect) {
+          await window.pywebview.api.set_note_rect(uid, x0, y0, x1, y1);
+        }
+        if (document.getElementById('autoToggle')?.checked) {
+          await refreshPreview();
+        }
+      } catch {}
+    });
 
     // Keyboard shortcuts for selected element
     window.addEventListener('keydown', async (e) => {
@@ -519,4 +724,3 @@
   </script>
 </body>
 </html>
-

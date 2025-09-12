@@ -1189,8 +1189,9 @@ def highlight_and_margin_comment_pdf(
             doc.close()
             return str(out_path), 0, total_notes, 0
         else:
+            # Return the computed placements for preview/overlay use
             doc.close()
-            return None, 0, total_notes, 0, list(freeze_placements)
+            return None, 0, total_notes, 0, placements
 
     def _fallback_band(page):
         words = page.get_text("words") or []

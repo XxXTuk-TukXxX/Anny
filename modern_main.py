@@ -5,7 +5,9 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any, Dict
+import sys
+import subprocess
 
 try:
     import webview  # PyWebView for modern HTML UI bridge
@@ -17,6 +19,16 @@ from frontend.backend import run_ocr, _remove_background_supported
 from frontend.defaults import DEFAULTS
 from frontend.colors import build_color_map
 from highlights import highlight_and_margin_comment_pdf, _import_fitz
+
+# Debug flag controlled by env var ANNOTATE_DEBUG=1
+DEBUG = str(os.environ.get("ANNOTATE_DEBUG", "")).strip().lower() in ("1", "true", "yes")
+
+def _log(*args: Any) -> None:
+    if DEBUG:
+        try:
+            print("[Annotate]", *args, flush=True)
+        except Exception:
+            pass
 
 
 # Globals used by exposed API functions
@@ -126,6 +138,7 @@ def begin_ocr() -> bool:
                 custom_tesseract_path=None,
             )
             _OCR_PDF = outp
+            _log("OCR complete", {"out": outp})
             w2 = _wnd()
             try:
                 # After OCR, continue to Step 2 (web): get started page
@@ -134,6 +147,7 @@ def begin_ocr() -> bool:
             except Exception:
                 pass
         except Exception as e:
+            _log("OCR failed", type(e).__name__, str(e))
             if w and _SELECT_URL:
                 try:
                     w.load_url(_SELECT_URL)
@@ -342,6 +356,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             ann = _ANN_JSON
             if not pdf_path or not ann:
                 raise RuntimeError("Missing PDF or annotations JSON.")
+            _log("get_preview_url", {"pdf": pdf_path, "ann": ann})
 
             # Prepare output path in temp dir
             fd, tmp_pdf = tempfile.mkstemp(suffix="_preview.pdf")
@@ -387,6 +402,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                             note_fontfile=settings.get("note_fontfile"),
                         )
                         globals()['_PLACEMENTS'] = placements
+                        _log("plan_only computed", {"placements": len(placements)})
                     except Exception as e:
                         raise RuntimeError(f"Failed to compute placements: {type(e).__name__}: {e}")
                 if not _PAGE_SIZES:
@@ -398,6 +414,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                             sizes[i] = (int(pg.rect.width), int(pg.rect.height))
                         doc.close()
                         globals()['_PAGE_SIZES'] = sizes
+                        _log("page_sizes", {"count": len(sizes)})
                     except Exception:
                         globals()['_PAGE_SIZES'] = {}
 
@@ -449,6 +466,13 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 except Exception:
                     frz = []
 
+                _log("render_preview", {
+                    "fixed": len(_FIXED_OVERRIDES or {}),
+                    "text_over": len(_NOTE_TEXT_OVERRIDES or {}),
+                    "color_over": len(_NOTE_COLOR_OVERRIDES or {}),
+                    "fs_over": len(_NOTE_FONTSIZE_OVERRIDES or {}),
+                    "rot_over": len(_ROTATION_OVERRIDES or {}),
+                })
                 highlight_and_margin_comment_pdf(
                     pdf_path=pdf_path,
                     queries=[],
@@ -477,6 +501,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     # Preview-exact knobs
                     freeze_placements=frz,
                     fixed_note_rects=fixed,
+                    # Per-note style overrides
                     note_text_overrides=dict(_NOTE_COLOR_OVERRIDES),
                     note_fontsize_overrides=dict(_NOTE_FONTSIZE_OVERRIDES),
                     note_rotations=dict(_ROTATION_OVERRIDES),
@@ -487,6 +512,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
 
             global _PREVIEW_PDF
             _PREVIEW_PDF = tmp_pdf
+            _log("preview_pdf", tmp_pdf)
 
             # Encode to data URL for safe loading by PDF.js
             import base64
@@ -515,28 +541,109 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 _ = self.get_preview_url()  # ensures _PLACEMENTS and _PAGE_SIZES populated and preview up-to-date
             except Exception:
                 pass
+            # If placements are still missing, compute them now
+            if not (globals().get('_PLACEMENTS')):
+                try:
+                    settings = dict(DEFAULTS)
+                    _, _hi, _notes, _skipped, placements = highlight_and_margin_comment_pdf(
+                        pdf_path=pdf_path,
+                        queries=[], comments={}, annotations_json=ann,
+                        plan_only=True,
+                        note_width=int(settings.get("note_width", 240)),
+                        min_note_width=int(settings.get("min_note_width", 48)),
+                        note_fontsize=float(settings.get("note_fontsize", 9.0)),
+                        note_fill=settings.get("note_fill"),
+                        note_border=settings.get("note_border"),
+                        note_border_width=int(settings.get("note_border_width", 0)),
+                        note_text=settings.get("note_text", "red"),
+                        draw_leader=bool(settings.get("draw_leader", False)),
+                        leader_color=settings.get("leader_color"),
+                        allow_column_footer=bool(settings.get("allow_column_footer", True)),
+                        column_footer_max_offset=int(settings.get("column_footer_max_offset", 250)),
+                        max_vertical_offset=int(settings.get("max_vertical_offset", 90)),
+                        max_scan=int(settings.get("max_scan", 420)),
+                        side=settings.get("side", "outer"),
+                        allow_center_gutter=bool(settings.get("allow_center_gutter", True)),
+                        center_gutter_tolerance=float(settings.get("center_gutter_tolerance", 48.0)),
+                        dedupe_scope=str(settings.get("dedupe_scope", "page")),
+                        note_fontname=settings.get("note_fontname", "Roys-Regular"),
+                        note_fontfile=settings.get("note_fontfile"),
+                    )
+                    globals()['_PLACEMENTS'] = placements
+                    _log("meta: recomputed plan", {"placements": len(placements)})
+                except Exception:
+                    pass
             cmap = {}
             try:
                 cmap = build_color_map(ann, fallback="#ff9800")
             except Exception:
                 pass
+            # Per-note overrides (color and text)
+            color_overrides = globals().get('_NOTE_COLOR_OVERRIDES') or {}
+            text_overrides = globals().get('_NOTE_TEXT_OVERRIDES') or {}
+
             placements = []
             pls = globals().get('_PLACEMENTS') or []
             fixed = globals().get('_FIXED_OVERRIDES', {})
+            def _rect_tuple_any(r):
+                try:
+                    return (float(r.x0), float(r.y0), float(r.x1), float(r.y1))
+                except Exception:
+                    pass
+                try:
+                    t = tuple(float(x) for x in r)
+                    if len(t) == 4:
+                        return t
+                except Exception:
+                    pass
+                return None
+
+            def _get(pl, attr: str, key: str):
+                try:
+                    v = getattr(pl, attr)
+                    return v
+                except Exception:
+                    pass
+                try:
+                    # support dict-like
+                    return pl[key]
+                except Exception:
+                    return None
+
             for pl in pls:
                 try:
-                    uid = getattr(pl, 'uid', None) or pl.get('uid')  # type: ignore
-                    pg = int(getattr(pl, 'page_index', None) or pl.get('page_index'))  # type: ignore
-                    rect = getattr(pl, 'note_rect', None) or pl.get('note_rect')  # type: ignore
+                    uid = _get(pl, 'uid', 'uid')
+                    pg = _get(pl, 'page_index', 'page_index')
+                    rect = _get(pl, 'note_rect', 'note_rect')
+                    if uid is None or pg is None or rect is None:
+                        continue
+                    pg = int(pg)
                     if uid in fixed:
                         rect = fixed[uid]
-                    q = getattr(pl, 'query', None) or pl.get('query')  # type: ignore
-                    exp = getattr(pl, 'explanation', None) or pl.get('explanation')  # type: ignore
-                    col = cmap.get(q, '#ff9800')
+                    rt = _rect_tuple_any(rect)
+                    if not rt:
+                        continue
+                    q = _get(pl, 'query', 'query')
+                    exp = _get(pl, 'explanation', 'explanation')
+                    # Apply per-note text override if present (used to prefill editor prompt)
+                    try:
+                        if uid and uid in text_overrides:
+                            exp = text_overrides.get(uid) or exp
+                    except Exception:
+                        pass
+                    # Resolve color: per-note override wins over per-query color map
+                    col = None
+                    try:
+                        if uid and uid in color_overrides and color_overrides.get(uid):
+                            col = str(color_overrides.get(uid))
+                    except Exception:
+                        col = None
+                    if not col:
+                        col = cmap.get(q, '#ff9800')
                     placements.append({
                         'uid': uid,
                         'page_index': pg,
-                        'rect': tuple(float(x) for x in rect),
+                        'rect': rt,
                         'query': q,
                         'explanation': exp,
                         'color': col,
@@ -544,6 +651,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 except Exception:
                     continue
             pages = [{ 'index': i, 'width': w, 'height': h } for i, (w, h) in (globals().get('_PAGE_SIZES') or {}).items()]
+            _log("get_preview_meta", {"pages": len(pages), "placements": len(placements)})
             return { 'pages': pages, 'placements': placements }
 
         def get_preview_page_count(self):
@@ -552,6 +660,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             except Exception:
                 pass
             sizes = globals().get('_PAGE_SIZES') or {}
+            _log("get_preview_page_count", len(sizes))
             return { 'count': len(sizes), 'pages': [{ 'index': i, 'width': w, 'height': h } for i,(w,h) in sizes.items()] }
 
         def render_preview_page(self, index: int, max_width: int = 1400, max_height: int = 900):
@@ -580,6 +689,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 pix = pg.get_pixmap(matrix=mat, alpha=False)
                 data = pix.tobytes('png')
                 doc.close()
+                _log("render_preview_page", {"index": int(index), "px": (pix.width, pix.height), "pts": (wpt, hpt)})
             except Exception as e:
                 raise RuntimeError(f'Failed to rasterize page: {type(e).__name__}: {e}')
             import base64
@@ -596,6 +706,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         def set_note_rect(self, uid: str, x0: float, y0: float, x1: float, y1: float):
             try:
                 _FIXED_OVERRIDES[str(uid)] = (float(x0), float(y0), float(x1), float(y1))
+                _log("set_note_rect", uid, (x0, y0, x1, y1))
                 return True
             except Exception:
                 return False
@@ -603,6 +714,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         def set_note_text(self, uid: str, text: str):
             try:
                 _NOTE_TEXT_OVERRIDES[str(uid)] = str(text)
+                _log("set_note_text", uid, (text[:60] + '...') if len(text) > 60 else text)
                 return True
             except Exception:
                 return False
@@ -610,6 +722,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         def set_note_color(self, uid: str, color: str):
             try:
                 _NOTE_COLOR_OVERRIDES[str(uid)] = str(color)
+                _log("set_note_color", uid, color)
                 return True
             except Exception:
                 return False
@@ -620,6 +733,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 if fs <= 0:
                     return False
                 _NOTE_FONTSIZE_OVERRIDES[str(uid)] = fs
+                _log("set_note_fontsize", uid, fs)
                 return True
             except Exception:
                 return False
@@ -627,6 +741,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         def set_note_rotation(self, uid: str, angle: float):
             try:
                 _ROTATION_OVERRIDES[str(uid)] = float(angle)
+                _log("set_note_rotation", uid, float(angle))
                 return True
             except Exception:
                 return False
@@ -666,6 +781,46 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 return False
             settings = dict(DEFAULTS)
             try:
+                # Build freeze_placements just like preview (so text overrides are applied)
+                frz = []
+                try:
+                    fitz = _import_fitz()
+                    pls = globals().get('_PLACEMENTS') or []
+                    for pl in pls:
+                        try:
+                            uid = getattr(pl, 'uid', None)
+                            if uid is None:
+                                uid = pl.get('uid')  # type: ignore[attr-defined]
+                            pg_attr = getattr(pl, 'page_index', None)
+                            pg = int(pg_attr if pg_attr is not None else pl.get('page_index'))  # type: ignore[attr-defined]
+                            rect_val = getattr(pl, 'note_rect', None)
+                            if rect_val is None:
+                                rect_val = pl.get('note_rect')  # type: ignore[attr-defined]
+                            if isinstance(rect_val, (list, tuple)) and len(rect_val) == 4:
+                                rect_obj = fitz.Rect(*rect_val)
+                            else:
+                                rect_obj = fitz.Rect(float(rect_val.x0), float(rect_val.y0), float(rect_val.x1), float(rect_val.y1))
+                            q = getattr(pl, 'query', None)
+                            if q is None:
+                                q = pl.get('query')  # type: ignore[attr-defined]
+                            exp = getattr(pl, 'explanation', None)
+                            if exp is None:
+                                exp = pl.get('explanation')  # type: ignore[attr-defined]
+                            try:
+                                exp_override = globals().get('_NOTE_TEXT_OVERRIDES', {}).get(str(uid))
+                                if exp_override is not None:
+                                    exp = exp_override
+                            except Exception:
+                                pass
+                            P = type('P', (), {})
+                            p = P()
+                            p.uid = uid; p.page_index = pg; p.query = q; p.explanation = exp; p.note_rect = rect_obj
+                            frz.append(p)
+                        except Exception:
+                            continue
+                except Exception:
+                    frz = []
+
                 highlight_and_margin_comment_pdf(
                     pdf_path=pdf_path,
                     queries=[],
@@ -691,6 +846,13 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     dedupe_scope=str(settings.get("dedupe_scope", "page")),
                     note_fontname=settings.get("note_fontname", "Roys-Regular"),
                     note_fontfile=settings.get("note_fontfile"),
+                    # Ensure export respects current overrides and positions
+                    freeze_placements=frz,
+                    fixed_note_rects=dict(_FIXED_OVERRIDES),
+                    note_text_overrides=dict(_NOTE_COLOR_OVERRIDES),
+                    note_fontsize_overrides=dict(_NOTE_FONTSIZE_OVERRIDES),
+                    note_rotations=dict(_ROTATION_OVERRIDES),
+                    rotate_text_with_box=True,
                 )
                 return True
             except Exception:
@@ -700,6 +862,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         def set_freeze_layout(self, on: bool):
             global _FREEZE_LAYOUT
             _FREEZE_LAYOUT = bool(on)
+            _log("set_freeze_layout", _FREEZE_LAYOUT)
             return True
 
         def get_freeze_layout(self) -> bool:
@@ -708,7 +871,64 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         def set_auto_refresh(self, on: bool):
             global _AUTO_REFRESH
             _AUTO_REFRESH = bool(on)
+            _log("set_auto_refresh", _AUTO_REFRESH)
             return True
+
+        def debug_dump_state(self) -> Dict[str, Any]:
+            sizes = dict(globals().get('_PAGE_SIZES') or {})
+            placements = globals().get('_PLACEMENTS') or []
+            info: Dict[str, Any] = {
+                'src_pdf': _SRC_PDF,
+                'ocr_pdf': _OCR_PDF,
+                'ann_json': _ANN_JSON,
+                'preview_pdf': _PREVIEW_PDF,
+                'page_sizes_count': len(sizes),
+                'placements_count': len(placements),
+                'freeze_layout': _FREEZE_LAYOUT,
+                'auto_refresh': _AUTO_REFRESH,
+                'fixed_overrides_count': len(_FIXED_OVERRIDES or {}),
+                'text_overrides_count': len(_NOTE_TEXT_OVERRIDES or {}),
+                'color_overrides_count': len(_NOTE_COLOR_OVERRIDES or {}),
+                'fontsize_overrides_count': len(_NOTE_FONTSIZE_OVERRIDES or {}),
+                'rotation_overrides_count': len(_ROTATION_OVERRIDES or {}),
+            }
+            try:
+                if placements:
+                    pl = placements[0]
+                    info['sample_placement'] = {
+                        'uid': getattr(pl, 'uid', None),
+                        'page_index': int(getattr(pl, 'page_index', -1)),
+                    }
+            except Exception:
+                pass
+            _log("debug_dump_state", info)
+            return info
+
+        # Optional: open legacy Tk preview using previous UI behavior
+        def open_legacy_preview(self) -> bool:
+            pdf_path = _OCR_PDF or _SRC_PDF
+            ann = _ANN_JSON
+            if not pdf_path or not ann:
+                return False
+            try:
+                root = Path(__file__).resolve().parent
+                runner = (root / 'legacy_preview_runner.py').resolve()
+                if not runner.exists():
+                    return False
+                # Launch detached so it doesn't block the webview
+                creationflags = 0
+                try:
+                    # Windows specific flag to detach
+                    creationflags = 0x00000008  # CREATE_NEW_CONSOLE
+                except Exception:
+                    creationflags = 0
+                subprocess.Popen([sys.executable, str(runner), str(pdf_path), str(ann)],
+                                  cwd=str(root),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  creationflags=creationflags)
+                return True
+            except Exception:
+                return False
 
     webview.create_window(
         title="Annotate",
@@ -718,17 +938,21 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         resizable=True,
         js_api=_JSApi(),
     )
-    webview.start()
+    try:
+        webview.start(debug=DEBUG)
+    except TypeError:
+        webview.start()
     return _SRC_PDF, _OCR_PDF
 
 
 def main():
-    # If webview is available, run the full modern (web) flow for Steps 1–3.
-    if webview is not None:
+    # Prefer the modern web UI when pywebview is available.
+    # Set ANNOTATE_USE_MODERN=0 to force legacy Tk.
+    env_modern = os.environ.get("ANNOTATE_USE_MODERN", "").strip().lower()
+    use_modern = (env_modern in ("", "1", "true", "yes"))
+    if use_modern and webview is not None:
         _start_webview_flow()
         return
-
-    # Fallback: legacy Tk wizard
     app = WizardApp()
     app.mainloop()
 

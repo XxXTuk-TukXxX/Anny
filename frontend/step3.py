@@ -23,7 +23,8 @@ class Step3Mixin:
     
             ttk.Button(tb, text="Refresh preview", command=self._refresh_preview).pack(side="left", padx=12)
             # Preview behavior toggles
-            self.freeze_all_var = tk.BooleanVar(value=True)
+            # Start with dragging enabled by default
+            self.freeze_all_var = tk.BooleanVar(value=False)
             self.auto_refresh_var = tk.BooleanVar(value=AUTO_REFRESH_AFTER_DRAG)
             ttk.Checkbutton(tb, text="Freeze layout", variable=self.freeze_all_var).pack(side="left", padx=(8, 0))
             ttk.Checkbutton(tb, text="Auto-refresh after drag", variable=self.auto_refresh_var).pack(side="left", padx=(8, 0))
