@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Annotate — PDF Preview</title>
+
+  <!-- Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin />
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?display=swap&family=Inter:wght@400;500;700;900&family=Noto+Sans:wght@400;500;700;900" onload="this.rel='stylesheet'">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <style type="text/tailwindcss">
+    :root { --primary-color:#137fec; }
+    body { font-family: Inter, "Noto Sans", system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    /* PDF canvas wrapper should stay dark and fill */
+    #viewerHost { background:#1f2937; } /* gray-800 */
+    /* Hide default PDF.js text layer highlight blue (optional) */
+    .textLayer ::selection { background: rgba(19,127,236,.35); }
+    .dragging * { cursor: grabbing !important; }
+    /* Ensure overlay sits above page image/canvas and receives pointer events */
+    #pdfCanvas { z-index: 10; }
+    #imgPage { z-index: 10; pointer-events: none; }
+    #textLayer { z-index: 20; pointer-events: none; }
+    #overlay { z-index: 30; pointer-events: auto; }
+  </style>
+
+  <!-- PDF.js (optional; we guard usage if it fails to load) -->
+  <script src="https://unpkg.com/pdfjs-dist@4.8.69/build/pdf.min.js"></script>
+  <script>
+    try {
+      if (window.pdfjsLib) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.8.69/build/pdf.worker.min.js";
+      }
+    } catch (e) {
+      // ignored — fallback embed viewer will be used
+    }
+  </script>
+</head>
+
+<body class="bg-gray-50 text-gray-900">
+  <div class="relative flex min-h-screen flex-col overflow-x-hidden">
+    <!-- Header -->
+    <header class="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+      <div class="flex items-center gap-3">
+        <svg class="h-8 w-8 text-[var(--primary-color)]" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M8.58 8.58A22.5 22.5 0 1 0 39.42 8.58L24 24 8.58 8.58Z" fill="currentColor"/>
+        </svg>
+        <h1 class="text-xl font-bold tracking-tight">Annotate</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <button title="Settings" class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-900">
+          <span class="material-symbols-outlined text-2xl">settings</span>
+        </button>
+        <button title="Help" class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-900">
+          <span class="material-symbols-outlined text-2xl">help</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-4 py-3">
+      <div class="flex items-center gap-2">
+        <button id="prevBtn" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
+          <span class="material-symbols-outlined text-base">chevron_left</span> Prev page
+        </button>
+        <button id="nextBtn" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
+          Next page <span class="material-symbols-outlined text-base">chevron_right</span>
+        </button>
+        <button id="refreshBtn" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
+          <span class="material-symbols-outlined text-base">refresh</span> Refresh preview
+        </button>
+      </div>
+
+      <div class="mx-2 h-6 w-px bg-gray-200"></div>
+
+      <label class="inline-flex items-center gap-2 text-sm">
+        <input id="freezeToggle" type="checkbox" class="rounded border-gray-300" />
+        Freeze layout
+      </label>
+
+      <label class="inline-flex items-center gap-2 text-sm">
+        <input id="autoToggle" type="checkbox" class="rounded border-gray-300" />
+        Auto-refresh after drag
+      </label>
+
+      <div class="mx-2 h-6 w-px bg-gray-200"></div>
+
+      <div class="flex items-center gap-2 text-sm">
+        <span>Export to:</span>
+        <input id="exportPath" type="text" class="w-64 rounded-md border-gray-300 py-2 text-sm" value="annotated.pdf" />
+        <button id="browseBtn" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">Browse…</button>
+        <button id="exportBtn" class="inline-flex items-center gap-2 rounded-md bg-[var(--primary-color)] px-4 py-2 text-sm font-semibold text-white hover:bg-opacity-90">
+          <span class="material-symbols-outlined text-base">picture_as_pdf</span> Export PDF
+        </button>
+      </div>
+
+      <div class="ml-auto text-xs text-gray-500">
+        <span id="pageInfo">Page <span id="pageNum">1</span>/<span id="pageCount">—</span></span>
+      </div>
+    </div>
+
+    <!-- Viewer -->
+    <main id="viewerHost" class="flex-1 overflow-auto">
+      <div class="mx-auto max-w-7xl p-4">
+        <div id="canvasWrap" class="relative mx-auto flex min-h-[70vh] items-center justify-center rounded-xl bg-gray-900 shadow ring-1 ring-gray-800">
+          <!-- Canvas + text layer -->
+          <canvas id="pdfCanvas" class="max-w-full rounded-lg shadow-lg"></canvas>
+          <div id="textLayer" class="absolute inset-0 pointer-events-none"></div>
+          <div id="overlay" class="absolute inset-0"></div>
+          <img id="imgPage" class="absolute inset-0 m-auto hidden rounded-lg shadow-lg" alt="PDF page"/>
+        </div>
+        <!-- Removed iframe fallback in favor of rasterized images via backend -->
+      </div>
+    </main>
+  </div>
+
+  <script>
+    /***** Back-end integration points *****************************************
+     * Replace getPreviewUrl() / browseForPath() / exportEditedPdf() with your
+     * own logic. For desktop, we try window.pywebview.api if present.
+     *************************************************************************/
+
+    async function getPreviewUrl() {
+      // Try pywebview first, but wait briefly if it's not ready yet
+      const tryApi = async () => {
+        try {
+          if (window.pywebview?.api?.get_preview_url) {
+            return await window.pywebview.api.get_preview_url();
+          }
+        } catch (e) {
+          // fall through to retry / fallback
+        }
+        return null;
+      };
+
+      let url = await tryApi();
+      if (!url) {
+        const start = Date.now();
+        while (Date.now() - start < 2500) { // wait up to 2.5s for injection
+          await new Promise(r => setTimeout(r, 150));
+          url = await tryApi();
+          if (url) break;
+        }
+      }
+      if (url) return url;
+
+      // Fallback demo PDF only if no desktop bridge available
+      return "https://unec.edu.az/application/uploads/2014/12/pdf-sample.pdf";
+    }
+
+    async function browseForPath(current) {
+      if (window.pywebview?.api?.browse_export_path) {
+        const p = await window.pywebview.api.browse_export_path(current || "");
+        return p || current;
+      }
+      // Web fallback: just return current (no real file picker for path)
+      return current;
+    }
+
+    async function exportEditedPdf(targetPath) {
+      if (window.pywebview?.api?.export_pdf) {
+        return await window.pywebview.api.export_pdf(targetPath);
+      }
+      alert("Export hook not connected. Implement window.pywebview.api.export_pdf(path).");
+      return false;
+    }
+
+    async function notifyFreezeLayout(on) {
+      if (window.pywebview?.api?.set_freeze_layout) {
+        try { await window.pywebview.api.set_freeze_layout(!!on); } catch {}
+      }
+    }
+
+    /***** PDF.js viewer logic *************************************************/
+    const hasPdfJs = !!window.pdfjsLib;
+    let pdfDoc = null;
+    let pageNum = 1;
+    let isRendering = false;
+    let pendingPage = null;
+
+    const canvas = document.getElementById('pdfCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const canvasWrap = document.getElementById('canvasWrap');
+    const imgPage = document.getElementById('imgPage');
+    const overlay = document.getElementById('overlay');
+    let selectedUid = null;
+
+    const $pageNum = document.getElementById('pageNum');
+    const $pageCount = document.getElementById('pageCount');
+    const $pageInfo = document.getElementById('pageInfo');
+
+    function setPageInfo() {
+      if ($pageNum) $pageNum.textContent = String(pageNum);
+      if ($pageCount) $pageCount.textContent = pdfDoc ? String(pdfDoc.numPages) : '—';
+    }
+
+    async function loadDocument(url) {
+      try {
+        if (hasPdfJs) {
+          canvasWrap.classList.remove('hidden');
+          const loadingTask = pdfjsLib.getDocument({ url, verbosity: 0 });
+          pdfDoc = await loadingTask.promise;
+          pageNum = Math.min(pageNum, pdfDoc.numPages) || 1;
+          setPageInfo();
+          await renderPage(pageNum);
+        } else {
+          // Fallback to server-rendered PNGs per page
+          document.getElementById('prevBtn').disabled = false;
+          document.getElementById('nextBtn').disabled = false;
+          await renderFallbackPage(pageNum);
+        }
+      } catch (e) {
+        console.error(e);
+        try {
+          const msg = (e && (e.message || e.toString && e.toString())) || '';
+          alert('Failed to load PDF preview.' + (msg ? '\n' + msg : ''));
+        } catch (_) {
+          alert('Failed to load PDF preview.');
+        }
+      }
+    }
+
+    async function renderFallbackPage(num) {
+      if (!window.pywebview?.api?.render_preview_page) return;
+      // Ensure we know page count
+      try {
+        if (!window.__pageCount) {
+          const info = await window.pywebview.api.get_preview_page_count();
+          window.__pageCount = info?.count || 1;
+        }
+      } catch {}
+      pageNum = Math.max(1, Math.min(num, window.__pageCount || 1));
+      setPageInfo();
+      const w = canvasWrap.clientWidth - 32;
+      const h = Math.max(300, window.innerHeight * 0.75);
+      const res = await window.pywebview.api.render_preview_page(pageNum - 1, Math.max(200, w), Math.max(200, h));
+      imgPage.src = res.data_url;
+      imgPage.style.width = res.width_px + 'px';
+      imgPage.style.height = res.height_px + 'px';
+      imgPage.classList.remove('hidden');
+      // Size overlay to match
+      overlay.style.width = res.width_px + 'px';
+      overlay.style.height = res.height_px + 'px';
+      overlay.style.left = '50%';
+      overlay.style.top = '50%';
+      overlay.style.transform = 'translate(-50%, -50%)';
+      // Draw overlay using returned display size
+      drawOverlay(pageNum, res.width_px, res.height_px, { wpt: res.page_width_pts, hpt: res.page_height_pts });
+    }
+
+    async function renderPage(num) {
+      if (!pdfDoc) return;
+      isRendering = true;
+
+      const page = await pdfDoc.getPage(num);
+      // Fit-to-width scaling based on container size
+      const container = document.getElementById('canvasWrap');
+      const viewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(
+        (container.clientWidth - 32) / viewport.width, // padding allowance
+        (container.clientHeight - 32) / viewport.height
+      ) || 1.25;
+
+      const vp = page.getViewport({ scale });
+      canvas.width = vp.width | 0;
+      canvas.height = vp.height | 0;
+
+      const renderContext = { canvasContext: ctx, viewport: vp };
+      await page.render(renderContext).promise;
+
+      // Optional text layer (selection/search visuals)
+      const textLayerDiv = document.getElementById('textLayer');
+      textLayerDiv.innerHTML = ''; // clear
+      const textContent = await page.getTextContent();
+      pdfjsLib.renderTextLayer({
+        textContentSource: textContent,
+        container: textLayerDiv,
+        viewport: vp,
+      });
+
+      isRendering = false;
+      if (pendingPage !== null) {
+        const p = pendingPage; pendingPage = null; renderPage(p);
+      }
+      setPageInfo();
+      try { drawOverlay(num, vp.width, vp.height, null); } catch (e) {}
+    }
+
+    function queueRender(num) {
+      if (isRendering) { pendingPage = num; }
+      else { renderPage(num); }
+    }
+
+    // Controls
+    document.getElementById('prevBtn').addEventListener('click', async () => {
+      if (pageNum <= 1) return;
+      pageNum--;
+      if (hasPdfJs) queueRender(pageNum); else await renderFallbackPage(pageNum);
+    });
+
+    document.getElementById('nextBtn').addEventListener('click', async () => {
+      if (hasPdfJs) {
+        if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
+        pageNum++; queueRender(pageNum);
+      } else {
+        if (window.__pageCount && pageNum >= window.__pageCount) return;
+        pageNum++; await renderFallbackPage(pageNum);
+      }
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', async () => {
+      await refreshPreview();
+    });
+
+    document.getElementById('freezeToggle').addEventListener('change', (e) => {
+      const on = e.target.checked;
+      notifyFreezeLayout(on);
+      document.getElementById('canvasWrap').classList.toggle('dragging', on);
+    });
+
+    document.getElementById('autoToggle').addEventListener('change', (e) => {
+      // If you do post-drag re-rendering, wire it here
+      if (window.pywebview?.api?.set_auto_refresh) {
+        try { window.pywebview.api.set_auto_refresh(!!e.target.checked); } catch {}
+      }
+    });
+
+    document.getElementById('browseBtn').addEventListener('click', async () => {
+      const input = document.getElementById('exportPath');
+      input.value = await browseForPath(input.value);
+    });
+
+    document.getElementById('exportBtn').addEventListener('click', async () => {
+      const path = document.getElementById('exportPath').value || "annotated.pdf";
+      const ok = await exportEditedPdf(path);
+      if (ok) {
+        // Optional: toast
+        alert("Export complete:\n" + path);
+      }
+    });
+
+    // Keyboard shortcuts
+    window.addEventListener('keydown', (e) => {
+      if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+      if (e.key === 'ArrowLeft') { document.getElementById('prevBtn').click(); }
+      if (e.key === 'ArrowRight') { document.getElementById('nextBtn').click(); }
+      if (e.key.toLowerCase() === 'r') { document.getElementById('refreshBtn').click(); }
+      if (e.key.toLowerCase() === 'e') { document.getElementById('exportBtn').click(); }
+    });
+
+    // Auto-resize handling
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+      if (!pdfDoc) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => queueRender(pageNum), 120);
+    });
+
+    async function refreshPreview() {
+      try {
+        const url = await getPreviewUrl();
+        // Avoid cache-busting for data URLs
+        const finalUrl = url.startsWith('data:') ? url : (url + (url.includes('?') ? '&' : '?') + '_=' + Date.now());
+        await loadDocument(finalUrl);
+        await loadOverlayMeta();
+      } catch (e) {
+        console.error(e);
+        try {
+          const msg = (e && (e.message || e.toString && e.toString())) || '';
+          alert('Failed to load PDF preview.' + (msg ? '\n' + msg : ''));
+        } catch (_) {
+          alert('Failed to load PDF preview.');
+        }
+      }
+    }
+
+    // Initial load
+    (async function init() {
+      await refreshPreview();
+      // Ask backend if we should start frozen
+      try {
+        if (window.pywebview?.api?.get_freeze_layout) {
+          const on = await window.pywebview.api.get_freeze_layout();
+          const cb = document.getElementById('freezeToggle');
+          cb.checked = !!on; cb.dispatchEvent(new Event('change'));
+        }
+      } catch {}
+    })();
+
+    // If the bridge becomes ready later, try to refresh from the real source
+    document.addEventListener('pywebviewready', () => {
+      try { refreshPreview(); } catch {}
+    });
+
+    // -------- Overlay logic (drag + edit) --------
+    let overlayMeta = null;
+    async function loadOverlayMeta() {
+      try {
+        if (window.pywebview?.api?.get_preview_meta) {
+          overlayMeta = await window.pywebview.api.get_preview_meta();
+        }
+      } catch (e) {
+        overlayMeta = null;
+      }
+    }
+
+    function px(n) { return Math.round(n) + 'px'; }
+
+    function isFrozen() {
+      const cb = document.getElementById('freezeToggle');
+      return !!(cb && cb.checked);
+    }
+
+    function drawOverlay(num, canvasW, canvasH, pts) {
+      if (!overlayMeta) { if (overlay) overlay.innerHTML=''; return; }
+      const pageIndex = (num - 1);
+      const pageInfo = overlayMeta.pages?.find(p => p.index === pageIndex) || (pts ? { width: pts.wpt, height: pts.hpt } : null);
+      if (!overlay) return;
+      overlay.innerHTML = '';
+      if (!pageInfo) return;
+      const sx = canvasW / pageInfo.width;
+      const sy = canvasH / pageInfo.height;
+      overlay.style.width = px(canvasW);
+      overlay.style.height = px(canvasH);
+
+      const items = (overlayMeta.placements || []).filter(p => p.page_index === pageIndex);
+      items.forEach(p => {
+        let [x0, y0, x1, y1] = p.rect;
+        const el = document.createElement('div');
+        el.className = 'absolute border-2 rounded-sm bg-transparent';
+        el.style.borderColor = p.color || '#ff9800';
+        el.style.left = px(x0 * sx); el.style.top = px(y0 * sy);
+        el.style.width = px((x1 - x0) * sx); el.style.height = px((y1 - y0) * sy);
+        el.dataset.uid = p.uid;
+        el.title = 'Drag to move. Double-click to edit text.';
+
+        // Selection highlight
+        el.addEventListener('click', () => {
+          selectedUid = p.uid;
+          Array.from(overlay.children).forEach(ch => ch.style.outline = '');
+          el.style.outline = '2px dashed #fff';
+        });
+
+        // Drag handling (move only)
+        let startX=0, startY=0, orig={x0, y0, x1, y1}, dragging=false;
+        el.addEventListener('mousedown', (e) => {
+          if (isFrozen()) return; // disabled when frozen
+          dragging = true;
+          startX = e.clientX; startY = e.clientY;
+          orig = { x0, y0, x1, y1 };
+          e.preventDefault();
+        });
+        window.addEventListener('mousemove', (e) => {
+          if (!dragging) return;
+          const dx = (e.clientX - startX) / sx;
+          const dy = (e.clientY - startY) / sy;
+          const nx0 = orig.x0 + dx, ny0 = orig.y0 + dy, nx1 = orig.x1 + dx, ny1 = orig.y1 + dy;
+          el.style.left = px(nx0 * sx); el.style.top = px(ny0 * sy);
+          x0 = nx0; y0 = ny0; x1 = nx1; y1 = ny1;
+        });
+        window.addEventListener('mouseup', async () => {
+          if (!dragging) return; dragging = false;
+          try {
+            if (window.pywebview?.api?.set_note_rect) {
+              await window.pywebview.api.set_note_rect(p.uid, x0, y0, x1, y1);
+            }
+            // auto-refresh if enabled
+            if (document.getElementById('autoToggle')?.checked) {
+              await refreshPreview();
+            }
+          } catch {}
+        });
+
+        // Edit text
+        el.addEventListener('dblclick', async () => {
+          const val = prompt('Edit note text:', p.explanation || '');
+          if (val == null) return;
+          try {
+            if (window.pywebview?.api?.set_note_text) {
+              await window.pywebview.api.set_note_text(p.uid, val);
+              await refreshPreview();
+            }
+          } catch {}
+        });
+
+        overlay.appendChild(el);
+      });
+    }
+
+    // Keyboard shortcuts for selected element
+    window.addEventListener('keydown', async (e) => {
+      if (!selectedUid) return;
+      if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+      try {
+        if (e.key.toLowerCase() === 'f') {
+          const v = prompt('Set font size (pt):');
+          if (v && window.pywebview?.api?.set_note_fontsize) {
+            await window.pywebview.api.set_note_fontsize(selectedUid, parseFloat(v));
+            await refreshPreview();
+          }
+        } else if (e.key.toLowerCase() === 'c') {
+          const v = prompt('Set text color (#RRGGBB or named color):');
+          if (v && window.pywebview?.api?.set_note_color) {
+            await window.pywebview.api.set_note_color(selectedUid, v.trim());
+            await refreshPreview();
+          }
+        } else if (e.key.toLowerCase() === 'r') {
+          const v = prompt('Set rotation (degrees):');
+          if (v && window.pywebview?.api?.set_note_rotation) {
+            await window.pywebview.api.set_note_rotation(selectedUid, parseFloat(v));
+            await refreshPreview();
+          }
+        }
+      } catch {}
+    });
+  </script>
+</body>
+</html>
+

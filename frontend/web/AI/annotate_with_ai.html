@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"/>
+<link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect"/>
+<link as="style" href="https://fonts.googleapis.com/css2?display=swap&amp;family=Inter%3Awght%40400%3B500%3B700%3B900&amp;family=Noto+Sans%3Awght%40400%3B500%3B700%3B900" onload="this.rel='stylesheet'" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+<title>Stitch Design</title>
+<link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<style type="text/tailwindcss">
+    :root {
+      --primary-color: #137fec;
+    }
+  </style>
+</head>
+<body class="bg-gray-50 font-sans">
+<div class="relative flex size-full min-h-screen flex-col overflow-x-hidden" style="font-family: Inter, 'Noto Sans', sans-serif">
+<div class="flex h-full grow flex-col">
+<header class="flex items-center justify-between whitespace-nowrap border-b border-gray-200 px-6 py-4">
+<div class="flex items-center gap-3 text-gray-900">
+<svg class="h-8 w-8 text-[var(--primary-color)]" fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+<g clip-path="url(#clip0_6_319)">
+<path d="M8.57829 8.57829C5.52816 11.6284 3.451 15.5145 2.60947 19.7452C1.76794 23.9758 2.19984 28.361 3.85056 32.3462C5.50128 36.3314 8.29667 39.7376 11.8832 42.134C15.4698 44.5305 19.6865 45.8096 24 45.8096C28.3135 45.8096 32.5302 44.5305 36.1168 42.134C39.7033 39.7375 42.4987 36.3314 44.1494 32.3462C45.8002 28.361 46.2321 23.9758 45.3905 19.7452C44.549 15.5145 42.4718 11.6284 39.4217 8.57829L24 24L8.57829 8.57829Z" fill="currentColor"></path>
+</g>
+<defs>
+<clipPath id="clip0_6_319"><rect fill="white" height="48" width="48"></rect></clipPath>
+</defs>
+</svg>
+<h1 class="text-xl font-bold tracking-tight">Annotate</h1>
+</div>
+<div class="flex items-center gap-4">
+<button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
+<span class="material-symbols-outlined text-2xl"> settings </span>
+</button>
+<button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
+<span class="material-symbols-outlined text-2xl"> help </span>
+</button>
+</header>
+<main class="flex flex-1 items-center justify-center py-10 sm:py-16">
+<div class="w-full max-w-2xl px-4">
+<div class="mb-10 text-center">
+<h1 class="text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl">Annotate with AI</h1>
+<p class="mt-4 text-lg text-gray-600">Tell our AI what to look for in your document.</p>
+</div>
+<div class="relative">
+<textarea class="w-full resize-none rounded-full border-gray-300 bg-white py-4 pl-6 pr-40 text-base shadow-sm focus:border-[var(--primary-color)] focus:ring-[var(--primary-color)] sm:pr-48" id="annotation-prompt" name="annotation-prompt" placeholder="e.g., 'Annotate mentions of company names...'" rows="1"></textarea>
+<div class="absolute inset-y-0 right-0 flex items-center pr-2">
+<button id="startAiBtn" class="inline-flex items-center justify-center rounded-full bg-[var(--primary-color)] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-opacity-90 focus:outline-none focus:ring-2 focus:ring-[var(--primary-color)] focus:ring-offset-2" type="submit">
+<span class="material-symbols-outlined mr-2 -ml-1 h-5 w-5">auto_awesome</span>
+<span class="hidden sm:inline">Start Annotation</span>
+<span class="sm:hidden">Annotate</span>
+</button>
+</div>
+</div>
+<p class="mt-3 text-center text-sm text-gray-500">Be as specific as possible for the best results.</p>
+</div>
+</main>
+</div>
+</div>
+
+<script>
+  (function () {
+    var btn = document.getElementById('startAiBtn');
+    var ta = document.getElementById('annotation-prompt');
+    if (!btn) return;
+    function onClick(e) {
+      e.preventDefault();
+      var prompt = (ta && ta.value || '').trim();
+      if (!prompt) { alert('Please enter an annotation objective.'); return; }
+      var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+      if (!api || !api.start_gemini) { alert('Desktop bridge not available.'); return; }
+      try { api.start_gemini(prompt); } catch (err) { try { console.error(err); } catch (_) {} }
+    }
+    if (btn.addEventListener) btn.addEventListener('click', onClick);
+    else if (btn.attachEvent) btn.attachEvent('onclick', onClick);
+  })();
+ </script>
+
+</body></html>
