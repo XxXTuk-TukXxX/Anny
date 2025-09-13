@@ -28,6 +28,10 @@
     .resize-handle { position:absolute; width:10px; height:10px; right:-6px; bottom:-6px; background:#fff; border:2px solid #111; border-radius:3px; cursor: nwse-resize; }
     .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; }
     .modal { background:#fff; border-radius: .5rem; width: min(680px, 96vw); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    /* Context menu */
+    #ctxMenu { position: fixed; display:none; min-width: 180px; background:#fff; border:1px solid #e5e7eb; border-radius:.5rem; box-shadow:0 10px 25px rgba(0,0,0,.15); z-index:1000; }
+    #ctxMenu button { width:100%; text-align:left; padding:.5rem .75rem; font-size:.875rem; }
+    #ctxMenu button:hover { background:#f3f4f6; }
   </style>
 
   <!-- PDF.js (optional; we guard usage if it fails to load) -->
@@ -45,6 +49,15 @@
 
 <body class="bg-gray-50 text-gray-900">
   <div class="relative flex min-h-screen flex-col overflow-x-hidden">
+    <script>
+      // Temporary: surface JS errors to help diagnose blank UI
+      (function(){
+        try {
+          window.addEventListener('error', function(e){ try { alert('JS error: ' + (e?.message||e)); } catch(_){} });
+          window.addEventListener('unhandledrejection', function(e){ try { alert('Unhandled: ' + (e?.reason?.message||e?.reason||e)); } catch(_){} });
+        } catch(_) {}
+      })();
+    </script>
     <!-- Header -->
     <header class="flex items-center justify-between border-b border-gray-200 px-6 py-4">
       <div class="flex items-center gap-3">
@@ -64,7 +77,7 @@
     </header>
 
     <!-- Toolbar -->
-    <div class="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-4 py-3">
+    <div id="mainToolbar" class="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-4 py-3">
       <div class="flex items-center gap-2">
         <button id="prevBtn" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
           <span class="material-symbols-outlined text-base">chevron_left</span> Prev page
@@ -94,23 +107,6 @@
 
       <div class="mx-2 h-6 w-px bg-gray-200"></div>
 
-      <!-- Selected note styling -->
-      <div class="flex items-center gap-2 text-sm">
-        <span>Selected style:</span>
-        <label class="inline-flex items-center gap-2">
-          <span>Color</span>
-          <input id="colorInput" type="color" value="#ff9800" class="h-8 w-10 rounded border border-gray-300"/>
-        </label>
-        <label class="inline-flex items-center gap-2">
-          <span>Font</span>
-          <input id="fontSizeInput" type="number" min="6" step="0.5" value="9" class="w-20 rounded-md border-gray-300 py-1 text-sm"/>
-          <span>pt</span>
-        </label>
-        <button id="applyStyleBtn" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">Apply</button>
-      </div>
-
-      <div class="mx-2 h-6 w-px bg-gray-200"></div>
-
       <div class="flex items-center gap-2 text-sm">
         <span>Export to:</span>
         <input id="exportPath" type="text" class="w-64 rounded-md border-gray-300 py-2 text-sm" value="annotated.pdf" />
@@ -128,6 +124,35 @@
       </div>
     </div>
 
+    <!-- Edit toolbar (hidden by default) -->
+    <div id="editToolbar" class="hidden flex flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-4 py-3">
+      <button id="editBackBtn" title="Back" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm hover:bg-gray-50">
+        <span class="material-symbols-outlined text-base">arrow_back</span> Back
+      </button>
+      <div class="mx-2 h-6 w-px bg-gray-200"></div>
+      <div class="flex items-center gap-2 text-sm">
+        <span class="font-medium">Edit note</span>
+        <label class="inline-flex items-center gap-2">
+          <span>Text</span>
+          <input id="editTextInput" type="text" class="w-[28rem] max-w-[60vw] rounded-md border-gray-300 py-2 text-sm" placeholder="Enter note text..."/>
+        </label>
+        <label class="inline-flex items-center gap-2">
+          <span>Color</span>
+          <input id="editColorInput" type="color" value="#ff9800" class="h-8 w-10 rounded border border-gray-300"/>
+        </label>
+        <label class="inline-flex items-center gap-2">
+          <span>Font</span>
+          <input id="editFontSizeInput" type="number" min="6" step="0.5" value="9" class="w-20 rounded-md border-gray-300 py-1 text-sm"/>
+          <span>pt</span>
+        </label>
+        <button id="saveEditBtn" class="rounded-md bg-[var(--primary-color)] px-3 py-2 text-sm font-semibold text-white">Save</button>
+        <button id="cancelEditBtn" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm">Cancel</button>
+      </div>
+      <div class="ml-auto text-xs text-gray-500">
+        <span id="editNoteId" class="text-gray-400"></span>
+      </div>
+    </div>
+
     <!-- Viewer -->
     <main id="viewerHost" class="flex-1 overflow-auto">
       <div class="mx-auto max-w-7xl p-4">
@@ -139,21 +164,9 @@
           <img id="imgPage" class="absolute inset-0 m-auto hidden rounded-lg shadow-lg" style="z-index:10; pointer-events:none;" alt="PDF page"/>
         </div>
         
-        <!-- Edit text modal -->
-        <div id="editModal" class="modal-backdrop">
-          <div class="modal">
-            <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-              <h2 class="text-sm font-semibold">Edit note text</h2>
-              <button id="editClose" class="text-gray-500 hover:text-gray-900"><span class="material-symbols-outlined">close</span></button>
-            </div>
-            <div class="p-4">
-              <textarea id="editText" class="w-full h-48 rounded border border-gray-300 p-2 text-sm" placeholder="Enter note text..."></textarea>
-            </div>
-            <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-4 py-3">
-              <button id="editCancel" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm">Cancel</button>
-              <button id="editSave" class="rounded-md bg-[var(--primary-color)] px-3 py-2 text-sm font-semibold text-white">Save</button>
-            </div>
-          </div>
+        <!-- Context menu for note actions -->
+        <div id="ctxMenu" role="menu" aria-label="Note actions">
+          <button id="ctxEditText" role="menuitem">Edit text</button>
         </div>
         <!-- Removed iframe fallback in favor of rasterized images via backend -->
       </div>
@@ -219,6 +232,7 @@
 
     /***** PDF.js viewer logic *************************************************/
     const hasPdfJs = !!window.pdfjsLib;
+    let useImages = !hasPdfJs; // fallback mode flag
     let pdfDoc = null;
     let pageNum = 1;
     let isRendering = false;
@@ -243,7 +257,7 @@
     async function loadDocument(url) {
       try { console.log('[preview] loadDocument', (url||'').slice(0, 64)); } catch {}
       try {
-        if (hasPdfJs) {
+        if (!useImages && hasPdfJs) {
           canvasWrap.classList.remove('hidden');
           const loadingTask = pdfjsLib.getDocument({ url, verbosity: 0 });
           pdfDoc = await loadingTask.promise;
@@ -258,6 +272,16 @@
         }
       } catch (e) {
         console.error(e);
+        // Try image fallback if available via desktop bridge
+        try {
+          if (window.pywebview?.api?.render_preview_page) {
+            useImages = true;
+            document.getElementById('prevBtn').disabled = false;
+            document.getElementById('nextBtn').disabled = false;
+            await renderFallbackPage(pageNum);
+            return;
+          }
+        } catch {}
         try {
           const msg = (e && (e.message || e.toString && e.toString())) || '';
           alert('Failed to load PDF preview.' + (msg ? '\n' + msg : ''));
@@ -366,11 +390,11 @@
     document.getElementById('prevBtn').addEventListener('click', async () => {
       if (pageNum <= 1) return;
       pageNum--;
-      if (hasPdfJs) queueRender(pageNum); else await renderFallbackPage(pageNum);
+      if (!useImages && hasPdfJs) queueRender(pageNum); else await renderFallbackPage(pageNum);
     });
 
     document.getElementById('nextBtn').addEventListener('click', async () => {
-      if (hasPdfJs) {
+      if (!useImages && hasPdfJs) {
         if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
         pageNum++; queueRender(pageNum);
       } else {
@@ -418,25 +442,61 @@
       }
     });
 
-    // Apply style to selected
-    document.getElementById('applyStyleBtn').addEventListener('click', async () => {
-      if (!selectedUid) { alert('Select a note first.'); return; }
-      const color = document.getElementById('colorInput').value;
-      const fsz = parseFloat(document.getElementById('fontSizeInput').value || '0');
+    // Edit toolbar logic
+    const $mainTb = document.getElementById('mainToolbar');
+    const $editTb = document.getElementById('editToolbar');
+    const $editBackBtn = document.getElementById('editBackBtn');
+    const $saveEditBtn = document.getElementById('saveEditBtn');
+    const $cancelEditBtn = document.getElementById('cancelEditBtn');
+    const $editTextInput = document.getElementById('editTextInput');
+    const $editColorInput = document.getElementById('editColorInput');
+    const $editFontSizeInput = document.getElementById('editFontSizeInput');
+    const $editNoteId = document.getElementById('editNoteId');
+
+    function enterEditMode(uid) {
+      selectedUid = uid;
       try {
+        const p = (overlayMeta?.placements || []).find(x => x.uid === uid);
+        $editTextInput.value = (p && p.explanation) || '';
+        $editColorInput.value = (p && p.color) || '#ff9800';
+      } catch {}
+      // If we had a way to fetch font size per note, set it; default to 9
+      $editFontSizeInput.value = $editFontSizeInput.value || '9';
+      $editNoteId.textContent = uid ? ('#' + uid) : '';
+      $mainTb.classList.add('hidden');
+      $editTb.classList.remove('hidden');
+    }
+    function exitEditMode() {
+      $editTb.classList.add('hidden');
+      $mainTb.classList.remove('hidden');
+      $editNoteId.textContent = '';
+    }
+    $editBackBtn.addEventListener('click', exitEditMode);
+    $cancelEditBtn.addEventListener('click', exitEditMode);
+    $saveEditBtn.addEventListener('click', async () => {
+      if (!selectedUid) { exitEditMode(); return; }
+      const uid = selectedUid;
+      const text = $editTextInput.value || '';
+      const color = $editColorInput.value || '';
+      const fsz = parseFloat($editFontSizeInput.value || '0');
+      try {
+        if (window.pywebview?.api?.set_note_text) {
+          await window.pywebview.api.set_note_text(uid, text);
+        }
         if (window.pywebview?.api?.set_note_color && color) {
-          await window.pywebview.api.set_note_color(selectedUid, color);
+          await window.pywebview.api.set_note_color(uid, color);
           // Update outline immediately
-          const el = overlay.querySelector('[data-uid="'+selectedUid+'"]');
+          const el = overlay.querySelector('[data-uid="'+uid+'"]');
           if (el) el.style.borderColor = color;
         }
         if (window.pywebview?.api?.set_note_fontsize && fsz > 0) {
-          await window.pywebview.api.set_note_fontsize(selectedUid, fsz);
+          await window.pywebview.api.set_note_fontsize(uid, fsz);
         }
         if (document.getElementById('autoToggle')?.checked) {
           await refreshPreview();
         }
       } catch (e) { console.error(e); }
+      exitEditMode();
     });
 
     // Debug button: show backend + overlay state
@@ -478,14 +538,22 @@
 
     async function refreshPreview() {
       try {
+        // Prefer desktop bridge path when available (more reliable offline)
+        if (window.pywebview?.api) {
+          useImages = true;
+          await loadOverlayMeta();
+          try { console.log('[preview] overlayMeta', { pages: overlayMeta?.pages?.length || 0, placements: overlayMeta?.placements?.length || 0 }); } catch {}
+          await renderFallbackPage(pageNum);
+          return;
+        }
+
+        // Web fallback with PDF.js (uses remote sample if no bridge)
         const url = await getPreviewUrl();
-        // Avoid cache-busting for data URLs
         const finalUrl = url.startsWith('data:') ? url : (url + (url.includes('?') ? '&' : '?') + '_=' + Date.now());
         await loadDocument(finalUrl);
-        // Load overlay meta after document is ready, then re-render so overlay draws
         await loadOverlayMeta();
         try { console.log('[preview] overlayMeta', { pages: overlayMeta?.pages?.length || 0, placements: overlayMeta?.placements?.length || 0 }); } catch {}
-        if (hasPdfJs && pdfDoc) {
+        if (!useImages && hasPdfJs && pdfDoc) {
           queueRender(pageNum);
         } else {
           await renderFallbackPage(pageNum);
@@ -586,7 +654,7 @@
         el.setAttribute('data-y1', String(y1));
         el.setAttribute('data-sx', String(sx));
         el.setAttribute('data-sy', String(sy));
-        el.setAttribute('title', 'Drag to move. Double-click to edit text. Use corner handle to resize.');
+        el.setAttribute('title', 'Drag to move. Right-click for actions. Use corner handle to resize.');
         // Resize handle
         const h = document.createElement('div');
         h.className = 'resize-handle';
@@ -606,35 +674,32 @@
       t.style.outline = '2px dashed #fff';
     });
 
-    // Modal helpers
-    const $modal = document.getElementById('editModal');
-    const $editText = document.getElementById('editText');
-    const $editSave = document.getElementById('editSave');
-    const $editCancel = document.getElementById('editCancel');
-    const $editClose = document.getElementById('editClose');
-    function showModal() { $modal.style.display = 'flex'; }
-    function hideModal() { $modal.style.display = 'none'; }
-
-    overlay.addEventListener('dblclick', async (e) => {
+    // Context menu for note actions
+    const ctxMenu = document.getElementById('ctxMenu');
+    const ctxEdit = document.getElementById('ctxEditText');
+    function hideCtxMenu() { ctxMenu.style.display = 'none'; }
+    function showCtxMenu(x, y) {
+      ctxMenu.style.left = Math.max(8, x) + 'px';
+      ctxMenu.style.top = Math.max(8, y) + 'px';
+      ctxMenu.style.display = 'block';
+    }
+    overlay.addEventListener('contextmenu', (e) => {
       const t = e.target.closest('[data-uid]');
       if (!t) return;
-      const uid = t.getAttribute('data-uid');
-      const p = (overlayMeta?.placements || []).find(x => x.uid === uid);
-      $editText.value = (p && p.explanation) || '';
-      showModal();
-      $editSave.onclick = async () => {
-        const val = $editText.value;
-        hideModal();
-        try {
-          if (window.pywebview?.api?.set_note_text) {
-            await window.pywebview.api.set_note_text(uid, val);
-            await refreshPreview();
-          }
-        } catch {}
-      };
-      const cancel = () => { hideModal(); };
-      $editCancel.onclick = cancel; $editClose.onclick = cancel; $modal.addEventListener('click', (ev) => { if (ev.target === $modal) hideModal(); }, { once:true });
+      e.preventDefault();
+      selectedUid = t.getAttribute('data-uid');
+      Array.from(overlay.children).forEach(ch => ch.style.outline = '');
+      t.style.outline = '2px dashed #fff';
+      showCtxMenu(e.clientX, e.clientY);
     });
+    ctxEdit.addEventListener('click', () => {
+      hideCtxMenu();
+      if (selectedUid) enterEditMode(selectedUid);
+    });
+    window.addEventListener('click', (e) => {
+      if (ctxMenu.style.display === 'block' && !ctxMenu.contains(e.target)) hideCtxMenu();
+    });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCtxMenu(); });
 
     overlay.addEventListener('mousedown', (e) => {
       if (isFrozen()) return;
