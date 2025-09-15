@@ -8,31 +8,7 @@
 <title>Stitch Design</title>
 <link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<style type="text/tailwindcss">
-    :root {
-      --primary-50: #eff6ff;
-      --primary-100: #dbeafe;
-      --primary-200: #bfdbfe;
-      --primary-300: #93c5fd;
-      --primary-400: #60a5fa;
-      --primary-500: #3b82f6;
-      --primary-600: #2563eb;
-      --primary-700: #1d4ed8;
-      --primary-800: #1e40af;
-      --primary-900: #1e3a8a;
-      --primary-950: #172554;
-    }
-    body {
-        font-family: 'Inter', sans-serif;
-    }
-    .material-symbols-outlined {
-        font-variation-settings:
-        'FILL' 0,
-        'wght' 400,
-        'GRAD' 0,
-        'opsz' 24
-    }
-  </style>
+<link rel="stylesheet" href="assets/css/get_started.css" />
 </head>
 <body class="bg-gray-50 text-gray-900">
 <div class="flex min-h-screen flex-col">
@@ -46,10 +22,10 @@
 <clipPath id="clip0_6_319"><rect fill="white" height="48" width="48"></rect></clipPath>
 </defs>
 </svg>
-<h1 class="text-xl font-bold tracking-tight">Annotate</h1>
+<h1 class="text-xl font-bold tracking-tight">Anny</h1>
 </div>
 <div class="flex items-center gap-4">
-<button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
+<button id="btnSettings" class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
 <span class="material-symbols-outlined text-2xl"> settings </span>
 </button>
 <button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
@@ -101,24 +77,6 @@
 </main>
 </div>
 
-<script>
-  (function () {
-    function on(el, ev, fn) { if (!el) return; if (el.addEventListener) el.addEventListener(ev, fn); else if (el.attachEvent) el.attachEvent('on'+ev, fn); }
-    var ai = document.getElementById('chooseAI');
-    var js = document.getElementById('chooseJSON');
-    on(ai, 'click', function (e) {
-      e.preventDefault();
-      var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
-      if (!api || !api.goto_ai_prompt) { alert('Desktop bridge not available.'); return; }
-      try { api.goto_ai_prompt(); } catch (err) { try { console.error(err); } catch (_) {} }
-    });
-    on(js, 'click', function (e) {
-      e.preventDefault();
-      var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
-      if (!api || !api.choose_annotations_json) { alert('Desktop bridge not available.'); return; }
-      try { api.choose_annotations_json(); } catch (err) { try { console.error(err); } catch (_) {} }
-    });
-  })();
- </script>
+<script src="assets/js/get_started.js" defer></script>
 
 </body></html>

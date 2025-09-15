@@ -1,0 +1,12 @@
+# Core PDF processing
+pymupdf>=1.24.0        # PyMuPDF (imported as pymupdf/fitz)
+ocrmypdf>=14.0.0       # OCR (requires Tesseract installed separately)
+
+# Desktop web UI bridge
+pywebview>=4.0.0
+
+# AI annotations (Gemini)
+google-genai>=0.3.0    # Google Generative AI SDK
+pydantic>=2.0.0        # Structured output schema for Gemini
+python-dotenv>=1.0.0   # Load API keys from .env
+

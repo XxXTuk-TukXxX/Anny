@@ -1,0 +1,341 @@
+<html><head>
+<meta charset="utf-8"/>
+<link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect"/>
+<link as="style" href="https://fonts.googleapis.com/css2?display=swap&amp;family=Inter%3Awght%40400%3B500%3B700%3B900&amp;family=Noto+Sans%3Awght%40400%3B500%3B700%3B900" onload="this.rel='stylesheet'" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+<title>Stitch Design</title>
+<link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link rel="stylesheet" href="assets/css/settings.css" />
+</head>
+<body class="bg-gray-50">
+<div class="relative flex size-full min-h-screen flex-col group/design-root" style='font-family: Inter, "Noto Sans", sans-serif;'>
+<div class="layout-container flex h-full grow flex-col">
+<header class="flex items-center justify-between whitespace-nowrap border-b border-gray-200 px-6 py-4">
+<div class="flex items-center gap-3 text-gray-900">
+<svg class="h-8 w-8 text-[var(--primary-color)]" fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+<g clip-path="url(#clip0_6_319)">
+<path d="M8.57829 8.57829C5.52816 11.6284 3.451 15.5145 2.60947 19.7452C1.76794 23.9758 2.19984 28.361 3.85056 32.3462C5.50128 36.3314 8.29667 39.7376 11.8832 42.134C15.4698 44.5305 19.6865 45.8096 24 45.8096C28.3135 45.8096 32.5302 44.5305 36.1168 42.134C39.7033 39.7375 42.4987 36.3314 44.1494 32.3462C45.8002 28.361 46.2321 23.9758 45.3905 19.7452C44.549 15.5145 42.4718 11.6284 39.4217 8.57829L24 24L8.57829 8.57829Z" fill="currentColor"></path>
+</g>
+<defs>
+<clipPath id="clip0_6_319"><rect fill="white" height="48" width="48"></rect></clipPath>
+</defs>
+</svg>
+<h1 class="text-xl font-bold tracking-tight">Anny</h1>
+</div>
+<div class="flex items-center gap-4">
+<button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
+<span class="material-symbols-outlined text-2xl"> settings </span>
+</button>
+<button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
+<span class="material-symbols-outlined text-2xl"> help </span>
+</button>
+</header>
+<main class="flex-1 px-10 py-8">
+<div class="mx-auto max-w-4xl">
+<h2 class="text-3xl font-bold tracking-tight text-gray-900">Settings</h2>
+<div class="mt-8 space-y-12">
+<section>
+<h3 class="text-xl font-semibold leading-tight tracking-tight text-gray-900">Note Dimensions</h3>
+<div class="mt-6 grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="width">Width</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="width" name="width" type="number" min="1" step="1"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="min-width">Minimum Width</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="min-width" name="min-width" type="number" min="1" step="1"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="font-size">Font Size</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="font-size" name="font-size" type="number" min="1" step="0.5"/>
+</div>
+</div>
+</div>
+</section>
+<section>
+<h3 class="text-xl font-semibold leading-tight tracking-tight text-gray-900">Visuals</h3>
+<div class="mt-6 grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="fill">Fill</label>
+<div class="mt-2">
+<input list="color-suggestions" class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="fill" name="fill" type="text" placeholder="Empty = none"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="border">Border</label>
+<div class="mt-2">
+<input list="color-suggestions" class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="border" name="border" type="text" placeholder="Empty = none"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="border-width">Border Width</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="border-width" name="border-width" type="number" min="0" step="1"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="text-color">Text Color</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="text-color" name="text-color" type="color" value="#ff0000"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="leader-line-drawing">Draw Leader Line</label>
+<div class="mt-2 flex items-center gap-3">
+  <input class="h-5 w-5 rounded border-gray-300 text-[var(--primary-color)] focus:ring-[var(--primary-color)]" id="leader-line-drawing" name="leader-line-drawing" type="checkbox"/>
+  <span class="text-sm text-gray-600">Show a line from highlight to margin note</span>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="leader-line-color">Leader Line Color</label>
+<div class="mt-2">
+<input list="color-suggestions" class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="leader-line-color" name="leader-line-color" type="text" placeholder="Empty = auto"/>
+</div>
+</div>
+</div>
+</section>
+<section>
+<h3 class="text-xl font-semibold leading-tight tracking-tight text-gray-900">Placement</h3>
+<div class="mt-6 grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
+<div class="sm:col-span-3">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="column-footer-allowance">Allow Column Footer</label>
+<div class="mt-2">
+  <input class="h-5 w-5 rounded border-gray-300 text-[var(--primary-color)] focus:ring-[var(--primary-color)]" id="column-footer-allowance" name="column-footer-allowance" type="checkbox"/>
+</div>
+</div>
+<div class="sm:col-span-3">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="column-footer-offset">Column Footer Offset</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="column-footer-offset" name="column-footer-offset" type="number" min="0" step="1"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="vertical-offset">Vertical Offset</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="vertical-offset" name="vertical-offset" type="number" min="0" step="1"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="scan-limit">Scan Limit</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="scan-limit" name="scan-limit" type="number" min="0" step="1"/>
+</div>
+</div>
+<div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="side">Side</label>
+<div class="mt-2">
+<input list="side-options" class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="side" name="side" type="text"/>
+</div>
+</div>
+<div class="sm:col-span-3">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="center-gutter-allowance">Center Gutter Allowance</label>
+<div class="mt-2">
+<input class="h-5 w-5 rounded border-gray-300 text-[var(--primary-color)] focus:ring-[var(--primary-color)]" id="center-gutter-allowance" name="center-gutter-allowance" type="checkbox"/>
+</div>
+</div>
+<div class="sm:col-span-3">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="center-gutter-tolerance">Center Gutter Tolerance</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="center-gutter-tolerance" name="center-gutter-tolerance" type="number" min="0" step="0.5"/>
+</div>
+</div>
+<div class="sm:col-span-3">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="deduplication-scope">Deduplication Scope</label>
+<div class="mt-2">
+<input list="dedupe-options" class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="deduplication-scope" name="deduplication-scope" type="text"/>
+</div>
+</div>
+</div>
+</section>
+<section>
+<h3 class="text-xl font-semibold leading-tight tracking-tight text-gray-900">Font</h3>
+<div class="mt-6 grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
+<div class="sm:col-span-3">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="font-name">Font Name</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="font-name" name="font-name" type="text"/>
+</div>
+</div>
+<div class="sm:col-span-3">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="font-file-path">Font File Path</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="font-file-path" name="font-file-path" type="text"/>
+</div>
+</div>
+</div>
+</section>
+<div class="flex items-center justify-end gap-x-6 border-t border-gray-200 pt-6">
+<button id="btnCancel" class="text-sm font-semibold leading-6 text-gray-900" type="button">Cancel</button>
+<button id="btnSave" class="rounded-md bg-[var(--primary-color)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary-color)]" type="button">
+                  Save Changes
+                </button>
+</div>
+</div>
+</div>
+</main>
+</div>
+</div>
+
+<datalist id="color-suggestions">
+  <option value=""></option>
+  <option value="#ff0000">red</option>
+  <option value="#ff9800">orange</option>
+  <option value="#ffff00">yellow</option>
+  <option value="#00ff00">lime</option>
+  <option value="#00ffff">cyan</option>
+  <option value="#0000ff">blue</option>
+  <option value="#800080">purple</option>
+  <option value="#000000">black</option>
+  <option value="#ffffff">white</option>
+</datalist>
+<datalist id="side-options">
+  <option value="outer"></option>
+  <option value="inner"></option>
+  <option value="left"></option>
+  <option value="right"></option>
+</datalist>
+<datalist id="dedupe-options">
+  <option value="page"></option>
+  <option value="document"></option>
+</datalist>
+
+<script>
+(function(){
+  function $(id){ return document.getElementById(id); }
+  function toInt(v, d){ var n = parseInt(v, 10); return isFinite(n) ? n : d; }
+  function toFloat(v, d){ var n = parseFloat(v); return isFinite(n) ? n : d; }
+  function toBool(v){ if (typeof v === 'boolean') return v; var s = String(v||'').trim().toLowerCase(); return (s==='1'||s==='true'||s==='yes'||s==='on'); }
+  function toHexColor(val){
+    try {
+      var s = String(val||'').trim().toLowerCase();
+      var map = { red:'#ff0000', blue:'#0000ff', green:'#008000', lime:'#00ff00', orange:'#ff9800', yellow:'#ffff00', purple:'#800080', cyan:'#00ffff', black:'#000000', white:'#ffffff', grey:'#808080', gray:'#808080' };
+      return map[s] || val;
+    } catch(_) { return val; }
+  }
+
+  var map = {
+    'width': 'note_width',
+    'min-width': 'min_note_width',
+    'font-size': 'note_fontsize',
+    'fill': 'note_fill',
+    'border': 'note_border',
+    'border-width': 'note_border_width',
+    'text-color': 'note_text',
+    'leader-line-drawing': 'draw_leader',
+    'leader-line-color': 'leader_color',
+    'scan-limit': 'max_scan',
+    'side': 'side',
+    'center-gutter-allowance': 'allow_center_gutter',
+    'center-gutter-tolerance': 'center_gutter_tolerance',
+    'deduplication-scope': 'dedupe_scope',
+    'column-footer-allowance': 'allow_column_footer',
+    'column-footer-offset': 'column_footer_max_offset',
+    'vertical-offset': 'max_vertical_offset',
+    'font-name': 'note_fontname',
+    'font-file-path': 'note_fontfile'
+  };
+
+  function populate(s){
+    if (!s) return;
+    try {
+      Object.keys(map).forEach(function(id){
+        var key = map[id]; var el = $(id); if (!el) return;
+        var val = s[key];
+        if (val === undefined || val === null) return;
+        if (el.type === 'checkbox') {
+          el.checked = !!val;
+        } else if (el.type === 'number') {
+          el.value = String(val);
+        } else if (el.type === 'color') {
+          try { el.value = String(toHexColor(val)); } catch(_) { /* ignore invalid color */ }
+        } else {
+          el.value = String(val);
+        }
+      });
+    } catch (e) { try { console.error(e); } catch(_){} }
+  }
+
+  function collect(){
+    var p = {};
+    Object.keys(map).forEach(function(id){
+      var key = map[id]; var el = $(id); if (!el) return;
+      if (el.type === 'checkbox') {
+        p[key] = !!el.checked;
+        return;
+      }
+      var v = el.value;
+      if (key === 'note_width' || key === 'min_note_width' || key === 'max_scan' || key === 'note_border_width' || key === 'column_footer_max_offset' || key === 'max_vertical_offset') {
+        p[key] = toInt(v, 0);
+      } else if (key === 'note_fontsize' || key === 'center_gutter_tolerance') {
+        p[key] = toFloat(v, 0);
+      } else {
+        p[key] = v;
+      }
+    });
+    return p;
+  }
+
+  function on(el, ev, fn){ if (!el) return; if (el.addEventListener) el.addEventListener(ev, fn); else if (el.attachEvent) el.attachEvent('on'+ev, fn); }
+  // Quick color swatches
+  function bindSwatches(){
+    var btns = document.querySelectorAll('[data-color-for]');
+    for (var i=0;i<btns.length;i++){
+      btns[i].addEventListener('click', function(ev){
+        var id = this.getAttribute('data-color-for');
+        var col = this.getAttribute('data-color') || '';
+        var el = document.getElementById(id);
+        if (el) { el.value = col; try { el.focus(); } catch(_){} }
+      });
+    }
+  }
+
+  // Wire buttons
+  on($('btnCancel'), 'click', function(){ console.log('[settings] cancel'); try { history.back(); } catch(_){} });
+  on($('btnSave'), 'click', function(){
+    console.log('[settings] save clicked');
+    var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+    var payload = collect();
+    console.log('[settings] payload', payload);
+    if (!api || !api.save_settings) {
+      alert('Desktop bridge not available.');
+      return;
+    }
+    try {
+      var res = api.save_settings(payload);
+      if (res && typeof res.then === 'function') {
+        res.then(function(ok){ console.log('[settings] save result', ok); if (ok) { alert('Settings saved'); try { history.back(); } catch(_){} } else { alert('Failed to save settings'); } })
+          .catch(function(e){ try{ console.error(e); }catch(_){}; alert('Failed to save settings.'); });
+      } else {
+        if (res) { console.log('[settings] save result (sync)', res); alert('Settings saved'); try { history.back(); } catch(_){} } else { alert('Failed to save settings'); }
+      }
+    } catch (e) { try { console.error(e); } catch(_){} alert('Failed to save settings'); }
+  });
+
+  // Load settings on start (wait for pywebview api if needed)
+  (async function init(){
+    console.log('[settings] init');
+    function apiReady(){ return !!(window.pywebview && window.pywebview.api && window.pywebview.api.get_settings); }
+    var start = Date.now();
+    while (!apiReady() && (Date.now() - start < 2500)) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+    if (!api || !api.get_settings) { console.warn('[settings] pywebview api not ready'); return; }
+    try {
+      var r = api.get_settings();
+      if (r && typeof r.then === 'function') { r.then(function(s){ console.log('[settings] loaded', s); populate(s); }).catch(function(e){ try{console.error(e);}catch(_){} }); }
+      else { console.log('[settings] loaded (sync)', r); populate(r); }
+    } catch (e) { try { console.error(e); } catch(_){} }
+    try { bindSwatches(); } catch(_){}
+  })();
+})();
+</script>
+<script src="assets/js/settings.js" defer></script>
+
+</body></html>

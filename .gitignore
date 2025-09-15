@@ -7,3 +7,11 @@ __pycache__/
 # Environment file
 .env
 
+# Setup folder
+setup/
+
+# App icons
+*.ico
+
+dist/
+build/

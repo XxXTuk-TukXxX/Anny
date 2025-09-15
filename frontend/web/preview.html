@@ -12,27 +12,7 @@
 
   <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-  <style type="text/tailwindcss">
-    :root { --primary-color:#137fec; }
-    body { font-family: Inter, "Noto Sans", system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
-    /* PDF canvas wrapper should stay dark and fill */
-    #viewerHost { background:#1f2937; } /* gray-800 */
-    /* Hide default PDF.js text layer highlight blue (optional) */
-    .textLayer ::selection { background: rgba(19,127,236,.35); }
-    .dragging * { cursor: grabbing !important; }
-    /* Ensure overlay sits above page image/canvas and receives pointer events */
-    #pdfCanvas { z-index: 10; }
-    #imgPage { z-index: 10; pointer-events: none; }
-    #textLayer { z-index: 20; pointer-events: none; }
-    #overlay { z-index: 30; pointer-events: auto; }
-    .resize-handle { position:absolute; width:10px; height:10px; right:-6px; bottom:-6px; background:#fff; border:2px solid #111; border-radius:3px; cursor: nwse-resize; }
-    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; }
-    .modal { background:#fff; border-radius: .5rem; width: min(680px, 96vw); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
-    /* Context menu */
-    #ctxMenu { position: fixed; display:none; min-width: 180px; background:#fff; border:1px solid #e5e7eb; border-radius:.5rem; box-shadow:0 10px 25px rgba(0,0,0,.15); z-index:1000; }
-    #ctxMenu button { width:100%; text-align:left; padding:.5rem .75rem; font-size:.875rem; }
-    #ctxMenu button:hover { background:#f3f4f6; }
-  </style>
+  <link rel="stylesheet" href="assets/css/preview.css" />
 
   <!-- PDF.js (optional; we guard usage if it fails to load) -->
   <script src="https://unpkg.com/pdfjs-dist@4.8.69/build/pdf.min.js"></script>
@@ -45,29 +25,22 @@
       // ignored — fallback embed viewer will be used
     }
   </script>
+  <script src="assets/js/preview.js" defer></script>
 </head>
 
 <body class="bg-gray-50 text-gray-900">
   <div class="relative flex min-h-screen flex-col overflow-x-hidden">
-    <script>
-      // Temporary: surface JS errors to help diagnose blank UI
-      (function(){
-        try {
-          window.addEventListener('error', function(e){ try { alert('JS error: ' + (e?.message||e)); } catch(_){} });
-          window.addEventListener('unhandledrejection', function(e){ try { alert('Unhandled: ' + (e?.reason?.message||e?.reason||e)); } catch(_){} });
-        } catch(_) {}
-      })();
-    </script>
+    
     <!-- Header -->
     <header class="flex items-center justify-between border-b border-gray-200 px-6 py-4">
       <div class="flex items-center gap-3">
         <svg class="h-8 w-8 text-[var(--primary-color)]" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <path d="M8.58 8.58A22.5 22.5 0 1 0 39.42 8.58L24 24 8.58 8.58Z" fill="currentColor"/>
         </svg>
-        <h1 class="text-xl font-bold tracking-tight">Annotate</h1>
+        <h1 class="text-xl font-bold tracking-tight">Anny</h1>
       </div>
       <div class="flex items-center gap-2">
-        <button title="Settings" class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-900">
+        <button id="btnSettings" title="Settings" class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-900">
           <span class="material-symbols-outlined text-2xl">settings</span>
         </button>
         <button title="Help" class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-900">
@@ -91,6 +64,19 @@
         <button id="legacyBtn" title="Open legacy Tk preview" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
           <span class="material-symbols-outlined text-base">open_in_new</span> Legacy preview (Tk)
         </button>
+        <div class="mx-2 h-6 w-px bg-gray-200"></div>
+        <div class="flex items-center gap-1" id="zoomControls">
+          <button id="zoomOutBtn" title="Zoom out (Ctrl/⌘ -)" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm hover:bg-gray-50">
+            <span class="material-symbols-outlined text-base">zoom_out</span>
+          </button>
+          <div class="min-w-[4.5rem] select-none text-center text-sm" id="zoomLabel">100%</div>
+          <button id="zoomInBtn" title="Zoom in (Ctrl/⌘ +)" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm hover:bg-gray-50">
+            <span class="material-symbols-outlined text-base">zoom_in</span>
+          </button>
+          <button id="zoomFitBtn" title="Fit to page (Ctrl/⌘ 0)" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm hover:bg-gray-50">
+            <span class="material-symbols-outlined text-base">fit_screen</span>
+          </button>
+        </div>
       </div>
 
       <div class="mx-2 h-6 w-px bg-gray-200"></div>
@@ -237,6 +223,8 @@
     let pageNum = 1;
     let isRendering = false;
     let pendingPage = null;
+    let zoom = 1.0; // user zoom multiplier (1.0 = fit)
+    const ZOOM_MIN = 0.5, ZOOM_MAX = 4.0, ZOOM_STEP = 0.1;
 
     const canvas = document.getElementById('pdfCanvas');
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -291,6 +279,12 @@
       }
     }
 
+    function setZoomLabel() {
+      const z = Math.round(zoom * 100);
+      const el = document.getElementById('zoomLabel');
+      if (el) el.textContent = z + '%';
+    }
+
     async function renderFallbackPage(num) {
       if (!window.pywebview?.api?.render_preview_page) return;
       // Ensure we know page count
@@ -302,9 +296,9 @@
       } catch {}
       pageNum = Math.max(1, Math.min(num, window.__pageCount || 1));
       setPageInfo();
-      const w = canvasWrap.clientWidth - 32;
-      const h = Math.max(300, window.innerHeight * 0.75);
-      const res = await window.pywebview.api.render_preview_page(pageNum - 1, Math.max(200, w), Math.max(200, h));
+      const w = (canvasWrap.clientWidth - 32) * zoom;
+      const h = Math.max(300, window.innerHeight * 0.75) * zoom;
+      const res = await window.pywebview.api.render_preview_page(pageNum - 1, Math.max(200, Math.round(w)), Math.max(200, Math.round(h)));
       console.log('[preview] renderFallbackPage', { pageNum, res });
       imgPage.src = res.data_url;
       imgPage.style.width = res.width_px + 'px';
@@ -331,12 +325,11 @@
       // Fit-to-width scaling based on container size
       const container = document.getElementById('canvasWrap');
       const viewport = page.getViewport({ scale: 1 });
-      const scale = Math.min(
+      const base = Math.min(
         (container.clientWidth - 32) / viewport.width, // padding allowance
         (container.clientHeight - 32) / viewport.height
       ) || 1.25;
-
-      const vp = page.getViewport({ scale });
+      const vp = page.getViewport({ scale: base * zoom });
       canvas.width = vp.width | 0;
       canvas.height = vp.height | 0;
 
@@ -406,6 +399,20 @@
     document.getElementById('refreshBtn').addEventListener('click', async () => {
       await refreshPreview();
     });
+
+    // Zoom controls
+    function clampZoom(z) { return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)); }
+    async function applyZoom(newZoom) {
+      zoom = clampZoom(newZoom);
+      setZoomLabel();
+      if (!useImages && hasPdfJs) queueRender(pageNum); else await renderFallbackPage(pageNum);
+    }
+    const $zoomInBtn = document.getElementById('zoomInBtn');
+    const $zoomOutBtn = document.getElementById('zoomOutBtn');
+    const $zoomFitBtn = document.getElementById('zoomFitBtn');
+    if ($zoomInBtn) $zoomInBtn.addEventListener('click', async () => { await applyZoom(zoom + ZOOM_STEP); });
+    if ($zoomOutBtn) $zoomOutBtn.addEventListener('click', async () => { await applyZoom(zoom - ZOOM_STEP); });
+    if ($zoomFitBtn) $zoomFitBtn.addEventListener('click', async () => { await applyZoom(1.0); });
 
     document.getElementById('legacyBtn').addEventListener('click', async () => {
       if (window.pywebview?.api?.open_legacy_preview) {
@@ -526,14 +533,32 @@
       if (e.key === 'ArrowRight') { document.getElementById('nextBtn').click(); }
       if (e.key.toLowerCase() === 'r') { document.getElementById('refreshBtn').click(); }
       if (e.key.toLowerCase() === 'e') { document.getElementById('exportBtn').click(); }
+      const isMod = e.ctrlKey || e.metaKey;
+      if (isMod && (e.key === '+' || e.key === '=')) { e.preventDefault(); applyZoom(zoom + ZOOM_STEP); }
+      if (isMod && (e.key === '-' || e.key === '_')) { e.preventDefault(); applyZoom(zoom - ZOOM_STEP); }
+      if (isMod && (e.key === '0')) { e.preventDefault(); applyZoom(1.0); }
     });
+
+    // Mouse wheel zoom (with Ctrl/⌘)
+    canvasWrap.addEventListener('wheel', async (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const dir = e.deltaY > 0 ? -1 : 1; // down = zoom out
+      await applyZoom(zoom + dir * (ZOOM_STEP * 2));
+    }, { passive: false });
 
     // Auto-resize handling
     let resizeTimer = null;
     window.addEventListener('resize', () => {
-      if (!pdfDoc) return;
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => queueRender(pageNum), 120);
+      resizeTimer = setTimeout(() => {
+        if (!useImages && hasPdfJs) {
+          if (!pdfDoc) return;
+          queueRender(pageNum);
+        } else if (window.pywebview?.api?.render_preview_page) {
+          renderFallbackPage(pageNum);
+        }
+      }, 120);
     });
 
     async function refreshPreview() {
@@ -571,6 +596,7 @@
 
     // Initial load
     (async function init() {
+      try { setZoomLabel(); } catch {}
       await refreshPreview();
       // Ask backend if we should start frozen
       try {
@@ -786,6 +812,45 @@
         }
       } catch {}
     });
+  </script>
+  <script>
+    // Settings button -> open settings page via desktop bridge
+    (function(){
+      var sbtn = document.getElementById('btnSettings');
+      function openSettings(e){
+        if (e && e.preventDefault) e.preventDefault();
+        console.log('[settings] click');
+        try {
+          var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+          console.log('[settings] api?', !!api);
+          function fallback(){
+            try {
+              if (api && api.get_settings_url) {
+                var u = api.get_settings_url();
+                console.log('[settings] fallback url', u);
+                if (u) { window.location.href = u; return; }
+              }
+            } catch(err) { try { console.error(err); } catch(_){} }
+            alert('Failed to open settings.');
+          }
+          if (api && api.open_settings) {
+            console.log('[settings] calling open_settings');
+            var r = api.open_settings();
+            if (r && typeof r.then === 'function') {
+              r.then(function(ok){ console.log('[settings] open_settings result', ok); if (!ok) fallback(); })
+               .catch(function(e){ console.log('[settings] open_settings error', e); fallback(); });
+            } else if (!r) {
+              console.log('[settings] open_settings returned false');
+              fallback();
+            }
+          } else {
+            fallback();
+          }
+        } catch(err) { try { console.error(err); } catch(_){} }
+      }
+      if (sbtn && sbtn.addEventListener) sbtn.addEventListener('click', openSettings);
+      else if (sbtn && sbtn.attachEvent) sbtn.attachEvent('onclick', openSettings);
+    })();
   </script>
 </body>
 </html>

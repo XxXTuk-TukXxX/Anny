@@ -26,8 +26,31 @@ class NotePlacement:
     leader_to: Optional[Tuple[float, float]]         # end point (block edge midpoint) or None
 
 def _rect_tuple(r) -> Tuple[float, float, float, float]:
+    """Normalize a rectangle-like value into an (x0, y0, x1, y1) tuple.
+
+    Accepts:
+    - fitz.Rect or objects with .x0/.y0/.x1/.y1
+    - objects with a .rect attribute (e.g., annotations)
+    - a tuple/list of 4 numbers
+    """
+    # Tuple/list input
+    if isinstance(r, (tuple, list)) and len(r) == 4:
+        x0, y0, x1, y1 = r
+        return float(x0), float(y0), float(x1), float(y1)
+
+    # Objects that expose a .rect or .x0/.y0/.x1/.y1
     rr = getattr(r, "rect", r)
-    return (float(rr.x0), float(rr.y0), float(rr.x1), float(rr.y1))
+    try:
+        return (float(rr.x0), float(rr.y0), float(rr.x1), float(rr.y1))
+    except Exception:
+        pass
+
+    # Fallback: sequence-like objects
+    try:
+        x0, y0, x1, y1 = rr  # type: ignore[misc]
+        return float(x0), float(y0), float(x1), float(y1)
+    except Exception:
+        raise TypeError(f"Unsupported rect type: {type(r)!r}")
 
 def _make_uid(page_index: int, norm_ct: str, cx: float, cy: float) -> str:
     # deterministic across runs (unlike Python's randomized hash())
@@ -950,8 +973,24 @@ def highlight_and_margin_comment_pdf(
     fitz = _import_fitz()
 
     def _rect_tuple(r) -> Tuple[float, float, float, float]:
+        # Tuple/list input
+        if isinstance(r, (tuple, list)) and len(r) == 4:
+            x0, y0, x1, y1 = r
+            return float(x0), float(y0), float(x1), float(y1)
+
+        # Objects exposing .rect or .x0/.y0/.x1/.y1
         rr = getattr(r, "rect", r)
-        return (float(rr.x0), float(rr.y0), float(rr.x1), float(rr.y1))
+        try:
+            return (float(rr.x0), float(rr.y0), float(rr.x1), float(rr.y1))
+        except Exception:
+            pass
+
+        # Fallback: sequence-like
+        try:
+            x0, y0, x1, y1 = rr  # type: ignore[misc]
+            return float(x0), float(y0), float(x1), float(y1)
+        except Exception:
+            raise TypeError(f"Unsupported rect type: {type(r)!r}")
 
     def _make_uid(page_index: int, norm_ct: str, cx: float, cy: float) -> str:
         base = f"{page_index}|{norm_ct}|{round(cx,2)}|{round(cy,2)}"

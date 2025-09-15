@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover - optional dependency
 from UI import WizardApp
 from frontend.backend import run_ocr, _remove_background_supported
 from frontend.defaults import DEFAULTS
+from frontend.settings_store import get_effective_settings, save_user_settings, reset_user_settings
 from frontend.colors import build_color_map
 from highlights import highlight_and_margin_comment_pdf, _import_fitz
 
@@ -31,6 +32,26 @@ def _log(*args: Any) -> None:
             pass
 
 
+def _app_root() -> Path:
+    """Return the directory where bundled resources are stored.
+
+    - In normal execution, this is the directory containing this file.
+    - Under PyInstaller onefile, files are extracted under ``sys._MEIPASS``.
+    - Under PyInstaller onefolder (default in our build), data files live under
+      the ``_internal`` folder next to the executable (the default
+      --contents-directory).
+    """
+    try:
+        if getattr(sys, "frozen", False):  # running from PyInstaller bundle
+            base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+            internal = Path(sys.executable).resolve().parent / "_internal"
+            # Prefer the _internal dir if present (onefolder); otherwise MEIPASS
+            return internal if internal.exists() else base
+    except Exception:
+        pass
+    return Path(__file__).resolve().parent
+
+
 # Globals used by exposed API functions
 _SELECT_URL: Optional[str] = None
 _LOADING_URL: Optional[str] = None
@@ -38,6 +59,7 @@ _GET_STARTED_URL: Optional[str] = None
 _AI_PROMPT_URL: Optional[str] = None
 _AI_WORKING_URL: Optional[str] = None
 _PREVIEW_URL: Optional[str] = None
+_SETTINGS_URL: Optional[str] = None
 _SRC_PDF: Optional[str] = None
 _OCR_PDF: Optional[str] = None
 _ANN_JSON: Optional[str] = None
@@ -167,15 +189,25 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
     if webview is None:
         return None, None
 
-    root = Path(__file__).resolve().parent
+    root = _app_root()
     _SELECT_URL = (root / "frontend" / "web" / "select.html").resolve().as_uri()
     _LOADING_URL = (root / "frontend" / "web" / "loading.html").resolve().as_uri()
     # Step 2 (new)
-    global _GET_STARTED_URL, _AI_PROMPT_URL, _AI_WORKING_URL, _PREVIEW_URL
+    global _GET_STARTED_URL, _AI_PROMPT_URL, _AI_WORKING_URL, _PREVIEW_URL, _SETTINGS_URL
     _GET_STARTED_URL = (root / "frontend" / "web" / "get_started.html").resolve().as_uri()
     _AI_PROMPT_URL = (root / "frontend" / "web" / "AI" / "annotate_with_ai.html").resolve().as_uri()
     _AI_WORKING_URL = (root / "frontend" / "web" / "AI" / "ai_working.html").resolve().as_uri()
     _PREVIEW_URL = (root / "frontend" / "web" / "preview.html").resolve().as_uri()
+    _SETTINGS_URL = (root / "frontend" / "web" / "settings.html").resolve().as_uri()
+    _log("urls", {
+        "select": _SELECT_URL,
+        "loading": _LOADING_URL,
+        "get_started": _GET_STARTED_URL,
+        "ai_prompt": _AI_PROMPT_URL,
+        "ai_working": _AI_WORKING_URL,
+        "preview": _PREVIEW_URL,
+        "settings": _SETTINGS_URL,
+    })
 
     class _JSApi:
         # Step 1: OCR
@@ -366,7 +398,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             except Exception:
                 pass
 
-            settings = dict(DEFAULTS)
+            settings = get_effective_settings()
             # Normalize empty strings to None for colors
             def _none_if_empty(v):
                 s = (v or "").strip() if isinstance(v, str) else v
@@ -544,7 +576,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             # If placements are still missing, compute them now
             if not (globals().get('_PLACEMENTS')):
                 try:
-                    settings = dict(DEFAULTS)
+                    settings = get_effective_settings()
                     _, _hi, _notes, _skipped, placements = highlight_and_margin_comment_pdf(
                         pdf_path=pdf_path,
                         queries=[], comments={}, annotations_json=ann,
@@ -779,7 +811,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             ann = _ANN_JSON
             if not pdf_path or not ann or not target_path:
                 return False
-            settings = dict(DEFAULTS)
+            settings = get_effective_settings()
             try:
                 # Build freeze_placements just like preview (so text overrides are applied)
                 frz = []
@@ -904,6 +936,59 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             _log("debug_dump_state", info)
             return info
 
+        # Settings: open page, read, save
+        def open_settings(self) -> bool:
+            _log("open_settings: called", {"has_wnd": bool(_wnd()), "settings_url": _SETTINGS_URL})
+            w = _wnd()
+            if not (w and _SETTINGS_URL):
+                _log("open_settings: missing window or url", {"wnd": bool(w), "url": bool(_SETTINGS_URL)})
+                return False
+            # Defer navigation slightly to avoid callback teardown race
+            def _go():
+                ww = _wnd()
+                try:
+                    if ww and _SETTINGS_URL:
+                        _log("open_settings: navigating", _SETTINGS_URL)
+                        ww.load_url(_SETTINGS_URL)
+                except Exception:
+                    pass
+            try:
+                threading.Timer(0.05, _go).start()
+            except Exception:
+                return False
+            return True
+
+        def get_settings(self) -> Dict[str, Any]:
+            try:
+                s = get_effective_settings()
+                _log("get_settings", s)
+                return s
+            except Exception:
+                return dict(DEFAULTS)
+
+        def save_settings(self, patch: Dict[str, Any]) -> bool:
+            try:
+                _log("save_settings: incoming", patch)
+                ok = bool(save_user_settings(dict(patch or {})))
+                _log("save_settings: result", ok)
+                return ok
+            except Exception:
+                return False
+
+        def reset_settings(self) -> bool:
+            try:
+                ok = reset_user_settings()
+                _log("reset_settings", ok)
+                return ok
+            except Exception:
+                return False
+
+        def get_settings_url(self) -> str:
+            """Return the settings page URL for JS fallback navigation/debug."""
+            u = _SETTINGS_URL or ""
+            _log("get_settings_url", u)
+            return u
+
         # Optional: open legacy Tk preview using previous UI behavior
         def open_legacy_preview(self) -> bool:
             pdf_path = _OCR_PDF or _SRC_PDF
@@ -911,15 +996,15 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             if not pdf_path or not ann:
                 return False
             try:
-                root = Path(__file__).resolve().parent
+                root = _app_root()
                 runner = (root / 'legacy_preview_runner.py').resolve()
                 if not runner.exists():
                     return False
                 # Launch detached so it doesn't block the webview
                 creationflags = 0
                 try:
-                    # Windows specific flag to detach
-                    creationflags = 0x00000008  # CREATE_NEW_CONSOLE
+                    # Windows specific flag to hide console of child process
+                    creationflags = 0x08000000  # CREATE_NO_WINDOW
                 except Exception:
                     creationflags = 0
                 subprocess.Popen([sys.executable, str(runner), str(pdf_path), str(ann)],

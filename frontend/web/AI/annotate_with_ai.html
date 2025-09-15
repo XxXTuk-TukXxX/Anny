@@ -7,11 +7,7 @@
 <title>Stitch Design</title>
 <link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<style type="text/tailwindcss">
-    :root {
-      --primary-color: #137fec;
-    }
-  </style>
+<link rel="stylesheet" href="../assets/css/ai_annotate.css" />
 </head>
 <body class="bg-gray-50 font-sans">
 <div class="relative flex size-full min-h-screen flex-col overflow-x-hidden" style="font-family: Inter, 'Noto Sans', sans-serif">
@@ -26,10 +22,10 @@
 <clipPath id="clip0_6_319"><rect fill="white" height="48" width="48"></rect></clipPath>
 </defs>
 </svg>
-<h1 class="text-xl font-bold tracking-tight">Annotate</h1>
+<h1 class="text-xl font-bold tracking-tight">Anny</h1>
 </div>
 <div class="flex items-center gap-4">
-<button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
+<button id="btnSettings" class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
 <span class="material-symbols-outlined text-2xl"> settings </span>
 </button>
 <button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
@@ -58,22 +54,6 @@
 </div>
 </div>
 
-<script>
-  (function () {
-    var btn = document.getElementById('startAiBtn');
-    var ta = document.getElementById('annotation-prompt');
-    if (!btn) return;
-    function onClick(e) {
-      e.preventDefault();
-      var prompt = (ta && ta.value || '').trim();
-      if (!prompt) { alert('Please enter an annotation objective.'); return; }
-      var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
-      if (!api || !api.start_gemini) { alert('Desktop bridge not available.'); return; }
-      try { api.start_gemini(prompt); } catch (err) { try { console.error(err); } catch (_) {} }
-    }
-    if (btn.addEventListener) btn.addEventListener('click', onClick);
-    else if (btn.attachEvent) btn.attachEvent('onclick', onClick);
-  })();
- </script>
+<script src="../assets/js/ai_annotate.js" defer></script>
 
 </body></html>

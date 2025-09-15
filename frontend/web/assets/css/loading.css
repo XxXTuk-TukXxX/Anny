@@ -1,0 +1,11 @@
+:root {
+  --primary-color: #137fec;
+}
+.animate-loader {
+  animation: loader 1.5s infinite linear;
+}
+@keyframes loader {
+  0% { transform: translateX(-100%) }
+  100% { transform: translateX(100%) }
+}
+

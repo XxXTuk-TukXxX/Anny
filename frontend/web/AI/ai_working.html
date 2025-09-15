@@ -6,39 +6,7 @@
 <link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
-<style type="text/tailwindcss">
-      :root {
-        --primary-color: #137fec;
-      }
-      .animate-dots::after {
-        content: '.';
-        animation: dots 1s steps(5, end) infinite;
-      }
-      @keyframes dots {
-        0%, 20% {
-          color: rgba(0,0,0,0);
-          text-shadow:
-            .25em 0 0 rgba(0,0,0,0),
-            .5em 0 0 rgba(0,0,0,0);
-        }
-        40% {
-          color: currentColor;
-          text-shadow:
-            .25em 0 0 rgba(0,0,0,0),
-            .5em 0 0 rgba(0,0,0,0);
-        }
-        60% {
-          text-shadow:
-            .25em 0 0 currentColor,
-            .5em 0 0 rgba(0,0,0,0);
-        }
-        80%, 100% {
-          text-shadow:
-            .25em 0 0 currentColor,
-            .5em 0 0 currentColor;
-        }
-      }
-    </style>
+<link rel="stylesheet" href="../assets/css/ai_working.css" />
 </head>
 <body class="bg-gray-50">
 <div class="relative flex size-full min-h-screen flex-col group/design-root overflow-x-hidden" style='font-family: Inter, "Noto Sans", sans-serif;'>
@@ -53,7 +21,7 @@
 <clipPath id="clip0_6_319"><rect fill="white" height="48" width="48"></rect></clipPath>
 </defs>
 </svg>
-<h1 class="text-xl font-bold tracking-tight">Annotate</h1>
+<h1 class="text-xl font-bold tracking-tight">Anny</h1>
 </div>
 <div class="flex items-center gap-4">
 <button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
@@ -82,5 +50,9 @@
 </main>
 </div>
 </div>
+
+
+<script src="../assets/js/ai_working.js" defer></script>
+
 
 </body></html>
