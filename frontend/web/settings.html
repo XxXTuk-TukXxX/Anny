@@ -170,6 +170,17 @@
 </div>
 </div>
 </section>
+<section>
+<h3 class="text-xl font-semibold leading-tight tracking-tight text-gray-900">API</h3>
+<div class="mt-6 grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
+<div class="sm:col-span-6">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="api-key">Gemini API Key</label>
+<div class="mt-2">
+<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="api-key" name="api-key" type="password" placeholder="Enter your Gemini API key"/>
+</div>
+</div>
+</div>
+</section>
 <div class="flex items-center justify-end gap-x-6 border-t border-gray-200 pt-6">
 <button id="btnCancel" class="text-sm font-semibold leading-6 text-gray-900" type="button">Cancel</button>
 <button id="btnSave" class="rounded-md bg-[var(--primary-color)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary-color)]" type="button">
@@ -238,7 +249,8 @@
     'column-footer-offset': 'column_footer_max_offset',
     'vertical-offset': 'max_vertical_offset',
     'font-name': 'note_fontname',
-    'font-file-path': 'note_fontfile'
+    'font-file-path': 'note_fontfile',
+    'api-key': 'gemini_api_key'
   };
 
   function populate(s){

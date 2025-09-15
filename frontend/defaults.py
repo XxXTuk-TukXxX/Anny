@@ -25,6 +25,9 @@ DEFAULTS = {
     # Font
     "note_fontname": "Roys-Regular",
     "note_fontfile": r".\fonts\Roys-Regular.ttf",
+
+    # API
+    "gemini_api_key": "",
 }
 
 SCALE = 1.5

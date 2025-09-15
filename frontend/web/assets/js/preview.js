@@ -420,4 +420,3 @@ async function notifyFreezeLayout(on) {
     else if (sbtn && sbtn.attachEvent) sbtn.attachEvent('onclick', openSettings);
   })();
 })();
-

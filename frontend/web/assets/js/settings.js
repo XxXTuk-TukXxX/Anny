@@ -23,7 +23,8 @@
     'column-footer-offset': 'column_footer_max_offset',
     'vertical-offset': 'max_vertical_offset',
     'font-name': 'note_fontname',
-    'font-file-path': 'note_fontfile'
+    'font-file-path': 'note_fontfile',
+    'api-key': 'gemini_api_key'
   };
 
   function populate(s){ if (!s) return; try { Object.keys(map).forEach(function(id){ var key = map[id]; var el = $(id); if (!el) return; var val = s[key]; if (val === undefined || val === null) return; if (el.type === 'checkbox') { el.checked = !!val; } else if (el.type === 'number') { el.value = String(val); } else if (el.type === 'color') { try { el.value = String(toHexColor(val)); } catch(_) {} } else { el.value = String(val); } }); } catch (e) { try { console.error(e); } catch(_){} } }
@@ -36,4 +37,3 @@
 
   (async function init(){ function apiReady(){ return !!(window.pywebview && window.pywebview.api && window.pywebview.api.get_settings); } var start = Date.now(); while (!apiReady() && (Date.now() - start < 2500)) { await new Promise(r => setTimeout(r, 100)); } var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null; if (!api || !api.get_settings) { return; } try { var r = api.get_settings(); if (r && typeof r.then === 'function') { r.then(function(s){ populate(s); }).catch(function(){}); } else { populate(r); } } catch (e) {} try { bindSwatches(); } catch(_){} })();
 })();
-

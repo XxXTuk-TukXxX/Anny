@@ -21,8 +21,15 @@ class Annotation(BaseModel):
 def _resolve_api_key() -> str:
     key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not key:
+        # Fallback to app settings if available
+        try:
+            from frontend.settings_store import get_effective_settings  # lazy import
+            key = (get_effective_settings() or {}).get("gemini_api_key") or ""
+        except Exception:
+            key = ""
+    if not key:
         raise RuntimeError(
-            "Missing API key. Set GOOGLE_API_KEY (recommended) or GEMINI_API_KEY in your environment or .env."
+            "Missing API key. Set GOOGLE_API_KEY (recommended), GEMINI_API_KEY, or save it in Settings."
         )
     return key
 

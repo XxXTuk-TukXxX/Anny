@@ -25,7 +25,7 @@
       // ignored — fallback embed viewer will be used
     }
   </script>
-  <script src="assets/js/preview.js" defer></script>
+  
 </head>
 
 <body class="bg-gray-50 text-gray-900">
@@ -61,9 +61,6 @@
         <button id="refreshBtn" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
           <span class="material-symbols-outlined text-base">refresh</span> Refresh preview
         </button>
-        <button id="legacyBtn" title="Open legacy Tk preview" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
-          <span class="material-symbols-outlined text-base">open_in_new</span> Legacy preview (Tk)
-        </button>
         <div class="mx-2 h-6 w-px bg-gray-200"></div>
         <div class="flex items-center gap-1" id="zoomControls">
           <button id="zoomOutBtn" title="Zoom out (Ctrl/⌘ -)" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm hover:bg-gray-50">
@@ -94,14 +91,8 @@
       <div class="mx-2 h-6 w-px bg-gray-200"></div>
 
       <div class="flex items-center gap-2 text-sm">
-        <span>Export to:</span>
-        <input id="exportPath" type="text" class="w-64 rounded-md border-gray-300 py-2 text-sm" value="annotated.pdf" />
-        <button id="browseBtn" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">Browse…</button>
         <button id="exportBtn" class="inline-flex items-center gap-2 rounded-md bg-[var(--primary-color)] px-4 py-2 text-sm font-semibold text-white hover:bg-opacity-90">
           <span class="material-symbols-outlined text-base">picture_as_pdf</span> Export PDF
-        </button>
-        <button id="debugBtn" class="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
-          <span class="material-symbols-outlined text-base">bug_report</span> Debug
         </button>
       </div>
 
@@ -414,13 +405,7 @@
     if ($zoomOutBtn) $zoomOutBtn.addEventListener('click', async () => { await applyZoom(zoom - ZOOM_STEP); });
     if ($zoomFitBtn) $zoomFitBtn.addEventListener('click', async () => { await applyZoom(1.0); });
 
-    document.getElementById('legacyBtn').addEventListener('click', async () => {
-      if (window.pywebview?.api?.open_legacy_preview) {
-        try { await window.pywebview.api.open_legacy_preview(); } catch {}
-      } else {
-        alert('Legacy preview is only available in desktop app mode.');
-      }
-    });
+    
 
     document.getElementById('freezeToggle').addEventListener('change', (e) => {
       const on = e.target.checked;
@@ -435,16 +420,12 @@
       }
     });
 
-    document.getElementById('browseBtn').addEventListener('click', async () => {
-      const input = document.getElementById('exportPath');
-      input.value = await browseForPath(input.value);
-    });
-
     document.getElementById('exportBtn').addEventListener('click', async () => {
-      const path = document.getElementById('exportPath').value || "annotated.pdf";
+      const suggested = "annotated.pdf";
+      const path = await browseForPath(suggested);
+      if (!path) return;
       const ok = await exportEditedPdf(path);
       if (ok) {
-        // Optional: toast
         alert("Export complete:\n" + path);
       }
     });
@@ -506,25 +487,7 @@
       exitEditMode();
     });
 
-    // Debug button: show backend + overlay state
-    const debugBtn = document.getElementById('debugBtn');
-    if (debugBtn) {
-      debugBtn.addEventListener('click', async () => {
-        try {
-          const state = window.pywebview?.api?.debug_dump_state ? await window.pywebview.api.debug_dump_state() : {};
-          const meta = overlayMeta || {};
-          const info = {
-            pageNum,
-            hasPdfJs,
-            overlay: { pages: meta.pages?.length || 0, placements: meta.placements?.length || 0 },
-            backend: state,
-          };
-          alert('Debug info:\n' + JSON.stringify(info, null, 2));
-        } catch (e) {
-          alert('Debug failed: ' + (e?.message||e));
-        }
-      });
-    }
+    
 
     // Keyboard shortcuts
     window.addEventListener('keydown', (e) => {
