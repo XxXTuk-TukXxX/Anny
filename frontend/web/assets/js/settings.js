@@ -22,7 +22,6 @@
     'column-footer-allowance': 'allow_column_footer',
     'column-footer-offset': 'column_footer_max_offset',
     'vertical-offset': 'max_vertical_offset',
-    'font-name': 'note_fontname',
     'font-file-path': 'note_fontfile',
     'api-key': 'gemini_api_key'
   };
@@ -32,7 +31,40 @@
   function on(el, ev, fn){ if (!el) return; if (el.addEventListener) el.addEventListener(ev, fn); else if (el.attachEvent) el.attachEvent('on'+ev, fn); }
   function bindSwatches(){ var btns = document.querySelectorAll('[data-color-for]'); for (var i=0;i<btns.length;i++){ btns[i].addEventListener('click', function(){ var id = this.getAttribute('data-color-for'); var col = this.getAttribute('data-color') || ''; var el = document.getElementById(id); if (el) { el.value = col; try { el.focus(); } catch(_){} } }); } }
 
+  function browseFontFile(){
+    var api = (window.pywebview && window.pywebview.api && window.pywebview.api.browse_font_file) ? window.pywebview.api : null;
+    var input = $('font-file-path');
+    var current = input ? input.value : '';
+    function apply(path){ if (!path || !input) return; input.value = path; try { input.dispatchEvent(new Event('change')); } catch(_){} try { input.dispatchEvent(new Event('input')); } catch(_){} }
+    if (api){
+      try {
+        var res = api.browse_font_file(current || '');
+        if (res && typeof res.then === 'function'){
+          res.then(function(val){ if (val) apply(val); }).catch(function(){});
+        } else if (res){
+          apply(res);
+        }
+        return;
+      } catch (_) { /* fall through */ }
+    }
+    var picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = '.ttf,.otf,.ttc,.woff,.woff2';
+    picker.style.display = 'none';
+    picker.addEventListener('change', function(){
+      if (picker.files && picker.files.length){
+        var f = picker.files[0];
+        var path = (f && (f.path || f.webkitRelativePath || f.name)) || '';
+        if (path){ apply(path); }
+      }
+      if (picker.parentNode){ picker.parentNode.removeChild(picker); }
+    });
+    document.body.appendChild(picker);
+    picker.click();
+  }
+
   on($('btnCancel'), 'click', function(){ try { history.back(); } catch(_){} });
+  on($('font-file-browse'), 'click', function(){ browseFontFile(); });
   on($('btnSave'), 'click', function(){ var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null; var payload = collect(); if (!api || !api.save_settings) { alert('Desktop bridge not available.'); return; } try { var res = api.save_settings(payload); if (res && typeof res.then === 'function') { res.then(function(ok){ if (ok) { alert('Settings saved'); try { history.back(); } catch(_){} } else { alert('Failed to save settings'); } }).catch(function(){ alert('Failed to save settings.'); }); } else { if (res) { alert('Settings saved'); try { history.back(); } catch(_){} } else { alert('Failed to save settings'); } } } catch (e) { alert('Failed to save settings'); } });
 
   (async function init(){ function apiReady(){ return !!(window.pywebview && window.pywebview.api && window.pywebview.api.get_settings); } var start = Date.now(); while (!apiReady() && (Date.now() - start < 2500)) { await new Promise(r => setTimeout(r, 100)); } var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null; if (!api || !api.get_settings) { return; } try { var r = api.get_settings(); if (r && typeof r.then === 'function') { r.then(function(s){ populate(s); }).catch(function(){}); } else { populate(r); } } catch (e) {} try { bindSwatches(); } catch(_){} })();

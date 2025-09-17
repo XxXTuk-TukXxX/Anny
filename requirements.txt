@@ -9,4 +9,3 @@ pywebview>=4.0.0
 google-genai>=0.3.0    # Google Generative AI SDK
 pydantic>=2.0.0        # Structured output schema for Gemini
 python-dotenv>=1.0.0   # Load API keys from .env
-

@@ -156,17 +156,13 @@
 <section>
 <h3 class="text-xl font-semibold leading-tight tracking-tight text-gray-900">Font</h3>
 <div class="mt-6 grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6">
-<div class="sm:col-span-3">
-<label class="block text-sm font-medium leading-6 text-gray-900" for="font-name">Font Name</label>
-<div class="mt-2">
-<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="font-name" name="font-name" type="text"/>
+<div class="sm:col-span-6">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="font-file-path">Font File</label>
+<div class="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+<input class="form-input block w-full flex-1 rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="font-file-path" name="font-file-path" type="text" placeholder="fonts/Roys-Regular.ttf"/>
+<button class="inline-flex items-center justify-center rounded-md bg-[var(--primary-color)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary-color)]" id="font-file-browse" type="button">Browse...</button>
 </div>
-</div>
-<div class="sm:col-span-3">
-<label class="block text-sm font-medium leading-6 text-gray-900" for="font-file-path">Font File Path</label>
-<div class="mt-2">
-<input class="form-input block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="font-file-path" name="font-file-path" type="text"/>
-</div>
+<p class="text-xs text-gray-500">Pick a .ttf, .otf, or .ttc file. Relative paths are resolved inside the app folder.</p>
 </div>
 </div>
 </section>
@@ -248,7 +244,6 @@
     'column-footer-allowance': 'allow_column_footer',
     'column-footer-offset': 'column_footer_max_offset',
     'vertical-offset': 'max_vertical_offset',
-    'font-name': 'note_fontname',
     'font-file-path': 'note_fontfile',
     'api-key': 'gemini_api_key'
   };
@@ -305,6 +300,38 @@
         if (el) { el.value = col; try { el.focus(); } catch(_){} }
       });
     }
+  }
+
+  function browseFontFile(){
+    var api = (window.pywebview && window.pywebview.api && window.pywebview.api.browse_font_file) ? window.pywebview.api : null;
+    var input = $('font-file-path');
+    var current = input ? input.value : '';
+    function apply(path){ if (!path) return; if (!input) return; input.value = path; try { input.dispatchEvent(new Event('change')); } catch(_){} try { input.dispatchEvent(new Event('input')); } catch(_){} }
+    if (api){
+      try {
+        var res = api.browse_font_file(current || '');
+        if (res && typeof res.then === 'function'){
+          res.then(function(val){ if (val) apply(val); }).catch(function(){});
+        } else if (res){
+          apply(res);
+        }
+        return;
+      } catch (_) { /* fall through */ }
+    }
+    var picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = '.ttf,.otf,.ttc,.woff,.woff2';
+    picker.style.display = 'none';
+    picker.addEventListener('change', function(){
+      if (picker.files && picker.files.length){
+        var f = picker.files[0];
+        var path = (f && (f.path || f.webkitRelativePath || f.name)) || '';
+        if (path){ apply(path); }
+      }
+      if (picker.parentNode){ picker.parentNode.removeChild(picker); }
+    });
+    document.body.appendChild(picker);
+    picker.click();
   }
 
   // Wire buttons

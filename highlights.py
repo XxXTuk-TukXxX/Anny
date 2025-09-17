@@ -1544,12 +1544,10 @@ if __name__ == "__main__":
         dedupe_scope="page",
 
         # Your font
-        note_fontname="Roys-Regular",
-        note_fontfile=r".\fonts\Roys-Regular.ttf",
+        note_fontname="AnnotateNote",
+        note_fontfile="fonts/Roys-Regular.ttf",
 
         # Debug (to confirm fallback path)
         # debug=True,
     )
     print(f"Saved: {saved}  highlights={hi}  notes={notes}  skipped={skipped}")
-
-

@@ -8,6 +8,20 @@ from typing import Any, Dict
 from .defaults import DEFAULTS
 
 
+def _normalize_fontfile(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    if cleaned.startswith(".\\") or cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    cleaned = cleaned.replace("\\", "/")
+    while "//" in cleaned and not cleaned.startswith("//"):
+        cleaned = cleaned.replace("//", "/")
+    return cleaned
+
+
 def _settings_file() -> Path:
     """Return a writable path to persist user settings.
 
@@ -67,9 +81,13 @@ def save_user_settings(patch: Dict[str, Any]) -> bool:
             else:
                 # Strings or other passthrough values
                 merged[key] = val if val is not None else ""
+            if key == "note_fontfile":
+                merged[key] = _normalize_fontfile(merged[key])
         except Exception:
             # Skip invalid values, keep previous
             pass
+
+    merged["note_fontname"] = DEFAULTS.get("note_fontname", "AnnotateNote")
 
     try:
         p = _settings_file()
@@ -98,7 +116,8 @@ def get_effective_settings() -> Dict[str, Any]:
         for k, v in user.items():
             if k in eff:
                 eff[k] = v
+        eff["note_fontname"] = DEFAULTS.get("note_fontname", "AnnotateNote")
+        eff["note_fontfile"] = _normalize_fontfile(eff.get("note_fontfile"))
     except Exception:
         pass
     return eff
-

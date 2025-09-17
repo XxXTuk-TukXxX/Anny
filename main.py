@@ -32,6 +32,125 @@ def _log(*args: Any) -> None:
             pass
 
 
+def _spawn_tk_dialog(method: str, **options: Any) -> Optional[Any]:
+    """Invoke a Tk file dialog in a helper process and return the result."""
+
+    script = r"""
+import json
+import sys
+
+cfg = json.load(sys.stdin)
+method = cfg.pop("_method")
+
+from tkinter import Tk, filedialog
+
+root = Tk()
+root.withdraw()
+for key in list(cfg):
+    if cfg[key] is None:
+        cfg.pop(key)
+filetypes = cfg.get("filetypes")
+if isinstance(filetypes, list):
+    cfg["filetypes"] = [tuple(item) for item in filetypes]
+dialog = getattr(filedialog, method)
+result = dialog(**cfg)
+if isinstance(result, tuple):
+    result = list(result)
+root.destroy()
+
+json.dump(result, sys.stdout)
+"""
+
+    payload = dict(options)
+    payload["_method"] = method
+    creationflags = 0
+    startupinfo = None
+    if sys.platform.startswith("win"):
+        try:
+            creationflags = 0x08000000  # CREATE_NO_WINDOW
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= 0x00000001  # STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+        except Exception:
+            creationflags = 0
+            startupinfo = None
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            input=json.dumps(payload).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
+        )
+    except Exception as exc:  # pragma: no cover - best effort fallback
+        _log("tk dialog spawn failed", type(exc).__name__, str(exc))
+        return None
+
+    if proc.returncode != 0:
+        _log("tk dialog helper exited with", proc.returncode, proc.stderr.decode(errors="ignore").strip())
+        return None
+
+    try:
+        output = proc.stdout.decode("utf-8").strip()
+    except Exception:
+        return None
+    if not output:
+        return None
+
+    try:
+        value = json.loads(output)
+    except Exception:
+        return None
+
+    if value in (None, "", [], {}):
+        return None
+    return value
+
+
+def _fallback_open_dialog(title: str, filetypes: list[tuple[str, str]], allow_multiple: bool = False) -> Optional[list[str]]:
+    method = "askopenfilenames" if allow_multiple else "askopenfilename"
+    result = _spawn_tk_dialog(method, title=title, filetypes=filetypes)
+    if allow_multiple:
+        if isinstance(result, list) and result:
+            return [str(p) for p in result]
+        return None
+    if isinstance(result, str) and result:
+        return [result]
+    return None
+
+
+def _fallback_save_dialog(title: str, filetypes: list[tuple[str, str]], defaultextension: str, initialfile: str | None) -> Optional[str]:
+    result = _spawn_tk_dialog(
+        "asksaveasfilename",
+        title=title,
+        filetypes=filetypes,
+        defaultextension=defaultextension,
+        initialfile=initialfile,
+    )
+    if isinstance(result, str) and result:
+        return result
+    return None
+
+
+def _resolved_settings() -> Dict[str, Any]:
+    settings = get_effective_settings()
+    try:
+        settings["note_fontname"] = DEFAULTS.get("note_fontname", "AnnotateNote")
+        fontfile = settings.get("note_fontfile")
+        if isinstance(fontfile, str) and fontfile.strip():
+            p = Path(fontfile)
+            if not p.is_absolute():
+                root = _app_root()
+                candidate = (root / p).resolve()
+                settings["note_fontfile"] = str(candidate)
+    except Exception:
+        pass
+    return settings
+
+
 def _app_root() -> Path:
     """Return the directory where bundled resources are stored.
 
@@ -97,20 +216,13 @@ def begin_ocr() -> bool:
     except Exception:
         paths = None
 
-    # Fallback to Tk file dialog if pywebview dialog is unavailable
+    # Fallback to external Tk helper if pywebview dialog is unavailable
     if not paths:
-        try:
-            from tkinter import Tk, filedialog  # lazy import
-            _tk = Tk()
-            _tk.withdraw()
-            path = filedialog.askopenfilename(
-                title="Choose input PDF",
-                filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
-            )
-            _tk.destroy()
-            paths = [path] if path else None
-        except Exception:
-            paths = None
+        paths = _fallback_open_dialog(
+            title="Choose input PDF",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            allow_multiple=False,
+        )
 
     if not paths:
         return False
@@ -248,18 +360,13 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             except Exception:
                 pass
 
-            # Fallback to Tk file dialog
             if not p:
-                try:
-                    from tkinter import Tk, filedialog
-                    _tk = Tk(); _tk.withdraw()
-                    p = filedialog.askopenfilename(
-                        title="Choose annotations JSON",
-                        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-                    ) or None
-                    _tk.destroy()
-                except Exception:
-                    p = None
+                fallback = _fallback_open_dialog(
+                    title="Choose annotations JSON",
+                    filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                )
+                if fallback:
+                    p = fallback[0]
 
             if not p:
                 return False
@@ -398,7 +505,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             except Exception:
                 pass
 
-            settings = get_effective_settings()
+            settings = _resolved_settings()
             # Normalize empty strings to None for colors
             def _none_if_empty(v):
                 s = (v or "").strip() if isinstance(v, str) else v
@@ -430,7 +537,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                             allow_center_gutter=bool(settings.get("allow_center_gutter", True)),
                             center_gutter_tolerance=float(settings.get("center_gutter_tolerance", 48.0)),
                             dedupe_scope=str(settings.get("dedupe_scope", "page")),
-                            note_fontname=settings.get("note_fontname", "Roys-Regular"),
+                            note_fontname=settings.get("note_fontname", DEFAULTS.get("note_fontname", "AnnotateNote")),
                             note_fontfile=settings.get("note_fontfile"),
                         )
                         globals()['_PLACEMENTS'] = placements
@@ -528,7 +635,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     allow_center_gutter=bool(settings.get("allow_center_gutter", True)),
                     center_gutter_tolerance=float(settings.get("center_gutter_tolerance", 48.0)),
                     dedupe_scope=str(settings.get("dedupe_scope", "page")),
-                    note_fontname=settings.get("note_fontname", "Roys-Regular"),
+                    note_fontname=settings.get("note_fontname", DEFAULTS.get("note_fontname", "AnnotateNote")),
                     note_fontfile=settings.get("note_fontfile"),
                     # Preview-exact knobs
                     freeze_placements=frz,
@@ -576,7 +683,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             # If placements are still missing, compute them now
             if not (globals().get('_PLACEMENTS')):
                 try:
-                    settings = get_effective_settings()
+                    settings = _resolved_settings()
                     _, _hi, _notes, _skipped, placements = highlight_and_margin_comment_pdf(
                         pdf_path=pdf_path,
                         queries=[], comments={}, annotations_json=ann,
@@ -598,7 +705,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                         allow_center_gutter=bool(settings.get("allow_center_gutter", True)),
                         center_gutter_tolerance=float(settings.get("center_gutter_tolerance", 48.0)),
                         dedupe_scope=str(settings.get("dedupe_scope", "page")),
-                        note_fontname=settings.get("note_fontname", "Roys-Regular"),
+                        note_fontname=settings.get("note_fontname", DEFAULTS.get("note_fontname", "AnnotateNote")),
                         note_fontfile=settings.get("note_fontfile"),
                     )
                     globals()['_PLACEMENTS'] = placements
@@ -778,6 +885,34 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             except Exception:
                 return False
 
+        def browse_font_file(self, current: str | None = None) -> str:
+            w = _wnd()
+            try:
+                paths = w.create_file_dialog(  # type: ignore[union-attr]
+                    webview.OPEN_DIALOG,  # type: ignore[attr-defined]
+                    allow_multiple=False,
+                    file_types=(
+                        ("Font files (*.ttf;*.otf;*.ttc;*.woff;*.woff2)", "*.ttf;*.otf;*.ttc;*.woff;*.woff2"),
+                        ("All files (*.*)", "*.*"),
+                    ),
+                ) if w else None
+                if paths:
+                    return str(paths[0])
+            except Exception:
+                pass
+
+            fallback = _fallback_open_dialog(
+                title="Choose font file",
+                filetypes=[
+                    ("Font files", "*.ttf *.otf *.ttc *.woff *.woff2"),
+                    ("All files", "*.*"),
+                ],
+                allow_multiple=False,
+            )
+            if fallback:
+                return fallback[0]
+            return current or ""
+
         def browse_export_path(self, current: str | None = None) -> str:
             w = _wnd()
             try:
@@ -791,27 +926,20 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             except Exception:
                 pass
 
-            # Fallback Tk
-            try:
-                from tkinter import Tk, filedialog
-                _tk = Tk(); _tk.withdraw()
-                p = filedialog.asksaveasfilename(
-                    title="Save annotated PDF as...",
-                    defaultextension=".pdf",
-                    filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
-                    initialfile=(current or "annotated.pdf"),
-                ) or ""
-                _tk.destroy()
-                return p
-            except Exception:
-                return current or ""
+            fallback = _fallback_save_dialog(
+                title="Save annotated PDF as...",
+                filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+                defaultextension=".pdf",
+                initialfile=current or "annotated.pdf",
+            )
+            return fallback or current or ""
 
         def export_pdf(self, target_path: str) -> bool:
             pdf_path = _OCR_PDF or _SRC_PDF
             ann = _ANN_JSON
             if not pdf_path or not ann or not target_path:
                 return False
-            settings = get_effective_settings()
+            settings = _resolved_settings()
             try:
                 # Build freeze_placements just like preview (so text overrides are applied)
                 frz = []
@@ -876,7 +1004,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     allow_center_gutter=bool(settings.get("allow_center_gutter", True)),
                     center_gutter_tolerance=float(settings.get("center_gutter_tolerance", 48.0)),
                     dedupe_scope=str(settings.get("dedupe_scope", "page")),
-                    note_fontname=settings.get("note_fontname", "Roys-Regular"),
+                    note_fontname=settings.get("note_fontname", DEFAULTS.get("note_fontname", "AnnotateNote")),
                     note_fontfile=settings.get("note_fontfile"),
                     # Ensure export respects current overrides and positions
                     freeze_placements=frz,

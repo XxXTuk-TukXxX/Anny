@@ -68,11 +68,6 @@ class Step2Mixin:
             self._update_ann_source_ui()
     
             # Font controls
-            tk.Label(self.step2, text="Font name:").grid(row=row, column=0, sticky="e", **pad)
-            self.fontname_var = tk.StringVar(value=DEFAULTS["note_fontname"])
-            tk.Entry(self.step2, textvariable=self.fontname_var, width=24).grid(row=row, column=1, sticky="w", **pad)
-            row += 1
-    
             tk.Label(self.step2, text="Font file (TTF/OTF):").grid(row=row, column=0, sticky="e", **pad)
             self.fontfile_var = tk.StringVar(value=DEFAULTS["note_fontfile"])
             tk.Entry(self.step2, textvariable=self.fontfile_var, width=80).grid(row=row, column=1, **pad)
@@ -274,7 +269,7 @@ class Step2Mixin:
                 allow_center_gutter=bool(self.center_gutter_var.get()),
                 center_gutter_tolerance=float(self.center_tol_var.get()),
                 dedupe_scope="page",
-                note_fontname=self.fontname_var.get().strip() or "Roys-Regular",
+                note_fontname=DEFAULTS.get("note_fontname", "AnnotateNote"),
                 note_fontfile=self.fontfile_var.get().strip() or None,
             )
     
