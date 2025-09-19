@@ -9,6 +9,12 @@ AI‑assisted PDF OCR and annotation tool. Convert PDFs to searchable text, gene
 - Live preview: Drag/resize note boxes, edit text, tweak colors/fonts; export what you see.
 - Modern UI: Web UI via PyWebView (fallback to Tk wizard if needed).
 
+## Windows installer
+- Download the latest setup bundle from the Releases page (grab the most recent `.exe`).
+- Run the installer; it places Anny under `C:\Program Files\Anny` by default.
+- If Search or the Start menu can't find the shortcut, launch `C:\Program Files\Anny\anny.exe` directly.
+- You can right-click `anny.exe` to pin it to Start, Taskbar, or create a desktop shortcut.
+
 ## Requirements
 - Python 3.10+
 - Tesseract OCR installed and on PATH
@@ -100,4 +106,3 @@ Notes:
 
 ## License
 No license provided yet. 
-

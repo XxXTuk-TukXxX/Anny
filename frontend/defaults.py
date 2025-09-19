@@ -34,4 +34,4 @@ SCALE = 1.5
 # Default off: rebuilding the full PDF on every drag makes the UI feel choppy
 # and can also cause the layout engine to re-evaluate placements. Users can
 # still click the "Refresh preview" button to rebuild when ready.
-AUTO_REFRESH_AFTER_DRAG = False
+AUTO_REFRESH_AFTER_DRAG = True
