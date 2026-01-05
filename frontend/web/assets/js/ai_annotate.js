@@ -7,6 +7,7 @@
       var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
       function fallback(){
         try { if (api && api.get_settings_url) { var u = api.get_settings_url(); if (u) { window.location.href = u; return; } } } catch(_){}
+        try { window.location.href = '/settings.html'; return; } catch(_) {}
         alert('Failed to open settings.');
       }
       if (api && api.open_settings) {
@@ -27,10 +28,32 @@
     var prompt = (ta && ta.value || '').trim();
     if (!prompt) { alert('Please enter an annotation objective.'); return; }
     var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
-    if (!api || !api.start_gemini) { alert('Desktop bridge not available.'); return; }
-    try { api.start_gemini(prompt); } catch (_) {}
+    if (api && api.start_gemini) {
+      try { api.start_gemini(prompt); } catch (_) {}
+      return;
+    }
+    btn.disabled = true;
+    try {
+      fetch('/api/start_gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt })
+      })
+      .then(function(res){ return res.json().then(function(data){ return { res: res, data: data }; }); })
+      .then(function(r){
+        if (r.res.ok && r.data && r.data.ok) {
+          window.location.href = r.data.next || '/preview.html';
+        } else {
+          alert((r.data && r.data.error) ? r.data.error : 'Failed to start AI annotations.');
+        }
+      })
+      .catch(function(){ alert('Failed to start AI annotations.'); })
+      .finally(function(){ btn.disabled = false; });
+    } catch (err) {
+      btn.disabled = false;
+      alert('Failed to start AI annotations.');
+    }
   }
   if (btn.addEventListener) btn.addEventListener('click', onClick);
   else if (btn.attachEvent) btn.attachEvent('onclick', onClick);
 })();
-

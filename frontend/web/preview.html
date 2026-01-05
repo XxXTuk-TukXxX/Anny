@@ -14,17 +14,7 @@
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <link rel="stylesheet" href="assets/css/preview.css" />
 
-  <!-- PDF.js (optional; we guard usage if it fails to load) -->
-  <script src="https://unpkg.com/pdfjs-dist@4.8.69/build/pdf.min.js"></script>
-  <script>
-    try {
-      if (window.pdfjsLib) {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.8.69/build/pdf.worker.min.js";
-      }
-    } catch (e) {
-      // ignored — fallback embed viewer will be used
-    }
-  </script>
+  <!-- PDF.js disabled in browser mode; server-rendered images are used instead -->
   
 </head>
 
@@ -60,6 +50,9 @@
         </button>
         <button id="refreshBtn" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
           <span class="material-symbols-outlined text-base">refresh</span> Refresh preview
+        </button>
+        <button id="addBoxBtn" class="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
+          <span class="material-symbols-outlined text-base">note_add</span> Add text box
         </button>
         <div class="mx-2 h-6 w-px bg-gray-200"></div>
         <div class="flex items-center gap-1" id="zoomControls">
@@ -109,9 +102,9 @@
       <div class="mx-2 h-6 w-px bg-gray-200"></div>
       <div class="flex items-center gap-2 text-sm">
         <span class="font-medium">Edit note</span>
-        <label class="inline-flex items-center gap-2">
-          <span>Text</span>
-          <input id="editTextInput" type="text" class="w-[28rem] max-w-[60vw] rounded-md border-gray-300 py-2 text-sm" placeholder="Enter note text..."/>
+        <label class="flex flex-col gap-1 text-sm">
+          <span class="font-medium">Text</span>
+          <textarea id="editTextInput" rows="4" class="w-[32rem] max-w-[60vw] resize-y rounded-md border-gray-300 px-3 py-2 text-sm" placeholder="Enter note text..."></textarea>
         </label>
         <label class="inline-flex items-center gap-2">
           <span>Color</span>
@@ -144,13 +137,14 @@
         <!-- Context menu for note actions -->
         <div id="ctxMenu" role="menu" aria-label="Note actions">
           <button id="ctxEditText" role="menuitem">Edit text</button>
+          <button id="ctxAddText" role="menuitem">Add text box here</button>
         </div>
         <!-- Removed iframe fallback in favor of rasterized images via backend -->
       </div>
     </main>
   </div>
 
-  <script>
+  <script type="application/json">
     /***** Back-end integration points *****************************************
      * Replace getPreviewUrl() / browseForPath() / exportEditedPdf() with your
      * own logic. For desktop, we try window.pywebview.api if present.
@@ -389,6 +383,28 @@
 
     document.getElementById('refreshBtn').addEventListener('click', async () => {
       await refreshPreview();
+    });
+
+    document.getElementById('addBoxBtn').addEventListener('click', async () => {
+      try {
+        if (!overlayMeta) {
+          await loadOverlayMeta();
+        }
+        const currentPage = Math.max(0, (pageNum || 1) - 1);
+        let pageInfo = overlayMeta && overlayMeta.pages ? overlayMeta.pages.find(p => p.index === currentPage) : null;
+        if (!pageInfo) {
+          pageInfo = { width: canvasWrap?.clientWidth || 600, height: canvasWrap?.clientHeight || 800 };
+        }
+        const res = await createManualNoteAt(currentPage, (pageInfo.width || 600) / 2, (pageInfo.height || 800) / 2);
+        if (!res || !res.uid) {
+          alert('Manual note request failed. Make sure manual mode is active.');
+        } else {
+          alert('Manual note created: ' + JSON.stringify(res));
+        }
+      } catch (err) {
+        console.error('[preview] addBoxBtn failed', err);
+        alert('Manual note request failed.');
+      }
     });
 
     // Zoom controls
@@ -630,7 +646,12 @@
 
       const items = (overlayMeta.placements || []).filter(p => p.page_index === pageIndex);
       items.forEach(p => {
-        let [x0, y0, x1, y1] = p.rect;
+        const rect = p.note_rect || p.rect;
+        if (!rect || rect.length < 4) {
+          console.warn('[preview] missing rect for placement', p);
+          return;
+        }
+        let [x0, y0, x1, y1] = rect;
         const el = document.createElement('div');
         el.className = 'absolute border-2 rounded-sm bg-transparent';
         el.style.borderColor = p.color || '#ff9800';
@@ -651,6 +672,26 @@
         el.appendChild(h);
         overlay.appendChild(el);
       });
+    }
+
+    async function createManualNoteAt(pageIndex, pageX, pageY) {
+      if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.create_manual_text_box) {
+        alert('Manual text boxes are only available in the desktop app.');
+        return null;
+      }
+      try {
+        const res = await window.pywebview.api.create_manual_text_box(pageIndex, pageX, pageY);
+        console.log('[preview] create_manual_text_box result', res);
+        await refreshPreview();
+        if (res && res.uid) {
+          try { enterEditMode(res.uid); } catch (err) { console.warn(err); }
+        }
+        return res;
+      } catch (e) {
+        console.error('[preview] create_manual_text_box failed', e);
+        alert('Failed to create manual text box.');
+        return null;
+      }
     }
 
     // Selection, dragging, editing via delegation
@@ -815,5 +856,6 @@
       else if (sbtn && sbtn.attachEvent) sbtn.attachEvent('onclick', openSettings);
     })();
   </script>
+  <script src="assets/js/preview.js?v=3" defer></script>
 </body>
 </html>

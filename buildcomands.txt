@@ -1,0 +1,26 @@
+# 0. Clean old artifacts (optional but safest)
+rm -rf build dist
+mkdir dist
+
+# 1. Activate your venv
+source .venv/bin/activate
+
+# 2. Rebuild with console output enabled
+ANNY_CONSOLE=1 pyinstaller Anny.spec
+
+
+# 3. Refresh the installer helper + DMG staging
+cp third_party/ghostscript-macos/bin/gs dist/Anny.app/Contents/Resources/ghostscript/bin/gs
+chmod +x dist/Anny.app/Contents/Resources/ghostscript/bin/gs
+cp "Install Anny.command" dist/
+rm -rf dist/dmg-staging
+mkdir -p dist/dmg-staging
+cp -R dist/Anny.app dist/dmg-staging/
+cp "Install Anny.command" dist/dmg-staging/
+
+
+# 4. Build the DMG that ships the installer + console-enabled app
+rm -f dist/Anny.dmg
+hdiutil create -volname "Anny" \
+    -srcfolder dist/dmg-staging \
+    -fs HFS+ -format UDZO dist/Anny.dmg

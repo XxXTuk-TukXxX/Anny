@@ -7,6 +7,7 @@
       var api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
       function fallback(){
         try { if (api && api.get_settings_url) { var u = api.get_settings_url(); if (u) { window.location.href = u; return; } } } catch(_){}
+        try { window.location.href = '/settings.html'; return; } catch(_) {}
         alert('Failed to open settings.');
       }
       if (api && api.open_settings) {
@@ -21,4 +22,3 @@
 
   // Note: page shows progress only; no start button here.
 })();
-

@@ -50,6 +50,7 @@ Python packages are listed in `requirements.txt`.
 3. Run the app
    - `python main.py`
    - By default, the modern web UI opens. To force the legacy Tk UI, set `ANNOTATE_USE_MODERN=0` in your environment.
+   - Or run as a local Flask web app: `PORT=5001 python flask_app.py` then open http://localhost:5001/ in your browser. (Flask mode is single-user and intended for local use only.)
 
 ### Building a standalone app (optional)
 - Install PyInstaller: `pip install pyinstaller`

@@ -1,0 +1,56 @@
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SHARE_ROOT="$BASE_DIR/share/ghostscript"
+RESOURCE_DIR="$SHARE_ROOT/Resource"
+INIT_DIR="$RESOURCE_DIR/Init"
+FONT_DIR="$RESOURCE_DIR/Font"
+LIB_DIR="$SHARE_ROOT/lib"
+FONTS_ROOT="$SHARE_ROOT/fonts"
+
+GS_LIB_PATHS=""
+for candidate in "$LIB_DIR" "$RESOURCE_DIR" "$INIT_DIR" "$FONTS_ROOT"; do
+  if [ -d "$candidate" ]; then
+    if [ -n "$GS_LIB_PATHS" ]; then
+      GS_LIB_PATHS="$GS_LIB_PATHS:$candidate"
+    else
+      GS_LIB_PATHS="$candidate"
+    fi
+  fi
+done
+if [ -n "${GS_LIB:-}" ]; then
+  if [ -n "$GS_LIB_PATHS" ]; then
+    export GS_LIB="$GS_LIB_PATHS:$GS_LIB"
+  else
+    export GS_LIB="$GS_LIB"
+  fi
+elif [ -n "$GS_LIB_PATHS" ]; then
+  export GS_LIB="$GS_LIB_PATHS"
+fi
+if [ -d "$RESOURCE_DIR" ]; then
+  RES="$RESOURCE_DIR"
+  case "$RES" in
+    */) : ;;
+    *) RES="$RES/" ;;
+  esac
+  FONT="$FONT_DIR"
+  if [ -d "$FONT" ]; then
+    case "$FONT" in
+      */) : ;;
+      *) FONT="$FONT/" ;;
+    esac
+  else
+    FONT="$RES/Font/"
+  fi
+  export GS_GEN_RESOURCE_DIR="$RES"
+  export GS_RESOURCE_DIR="$RES"
+  export GS_FONT_RESOURCE_DIR="$FONT"
+  EXTRA_OPTS="-sGenericResourceDir=$RES -sFontResourceDir=$FONT"
+  if [ -n "${GS_OPTIONS:-}" ]; then
+    export GS_OPTIONS="$EXTRA_OPTS $GS_OPTIONS"
+  else
+    export GS_OPTIONS="$EXTRA_OPTS"
+  fi
+fi
+exec "$SCRIPT_DIR/gs.real" "$@"
