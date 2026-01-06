@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"/>
+<link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect"/>
+<link as="style" href="https://fonts.googleapis.com/css2?display=swap&amp;family=Inter%3Awght%40400%3B500%3B700%3B900&amp;family=Noto+Sans%3Awght%40400%3B500%3B700%3B900" onload="this.rel='stylesheet'" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+<title>Stitch Design</title>
+<link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link rel="stylesheet" href="assets/css/select.css" />
+</head>
+<body class="bg-gray-50 text-gray-900" style='font-family: Inter, "Noto Sans", sans-serif;'>
+<div class="relative flex size-full min-h-screen flex-col group/design-root overflow-x-hidden">
+<div class="layout-container flex h-full grow flex-col">
+<header class="flex items-center justify-between whitespace-nowrap border-b border-gray-200 px-6 py-4">
+<div class="flex items-center gap-3 text-gray-900">
+<svg class="h-8 w-8 text-[var(--primary-color)]" fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+<g clip-path="url(#clip0_6_319)">
+<path d="M8.57829 8.57829C5.52816 11.6284 3.451 15.5145 2.60947 19.7452C1.76794 23.9758 2.19984 28.361 3.85056 32.3462C5.50128 36.3314 8.29667 39.7376 11.8832 42.134C15.4698 44.5305 19.6865 45.8096 24 45.8096C28.3135 45.8096 32.5302 44.5305 36.1168 42.134C39.7033 39.7375 42.4987 36.3314 44.1494 32.3462C45.8002 28.361 46.2321 23.9758 45.3905 19.7452C44.549 15.5145 42.4718 11.6284 39.4217 8.57829L24 24L8.57829 8.57829Z" fill="currentColor"></path>
+</g>
+<defs>
+<clipPath id="clip0_6_319"><rect fill="white" height="48" width="48"></rect></clipPath>
+</defs>
+</svg>
+<h1 class="text-xl font-bold tracking-tight">Anny</h1>
+</div>
+<div class="flex items-center gap-4">
+<button id="btnSettings" class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
+<span class="material-symbols-outlined text-2xl"> settings </span>
+</button>
+<button class="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900">
+<span class="material-symbols-outlined text-2xl"> help </span>
+</button>
+</header>
+<main class="flex flex-1 items-stretch gap-8 px-4 py-12">
+<aside id="workspaceSidebar" class="fixed top-0 left-0 z-40 h-full w-64 -translate-x-full transform transition-transform duration-300 ease-out">
+<div class="h-full overflow-y-auto border-r border-gray-200 bg-white p-4 shadow-lg">
+<p class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Workspace</p>
+<a href="upload.html" class="mt-2 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white bg-[var(--primary-color)] shadow-sm transition-colors hover:bg-opacity-90">
+<span class="material-symbols-outlined text-base">note_stack</span>
+Annotations
+</a>
+<a href="/custom_font_generator/font_page.html" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100">
+<span class="material-symbols-outlined text-base">edit_square</span>
+Font maker
+</a>
+</div>
+</aside>
+<section class="flex flex-1 items-center justify-center">
+<div class="flex max-w-md flex-1 flex-col items-center text-center">
+<div class="flex flex-col items-center gap-6">
+<div class="flex h-24 w-24 items-center justify-center rounded-full bg-gray-100">
+<span class="material-symbols-outlined text-5xl text-gray-500"> upload_file </span>
+</div>
+<div class="flex flex-col gap-2">
+<h2 class="text-4xl font-bold tracking-tight">Upload your PDF</h2>
+<p class="text-gray-500">Drag and drop or click below to select a file</p>
+</div>
+<input id="fileInput" type="file" accept="application/pdf" class="hidden" />
+<button id="uploadBtn" class="flex h-12 w-full max-w-xs cursor-pointer items-center justify-center rounded-md bg-[var(--primary-color)] px-6 text-base font-semibold text-white shadow-sm transition-colors hover:bg-opacity-90">
+<span class="truncate">Upload PDF</span>
+ </button>
+<a class="text-sm text-gray-600 underline transition-colors hover:text-gray-900" href="#">or view recent files</a>
+</div>
+</div>
+</section>
+</main>
+</div>
+</div>
+
+<script src="assets/js/select.js" defer></script>
+<script>
+  const sidebar = document.getElementById("workspaceSidebar");
+  const SHOW_ZONE_PX = 80;
+
+  document.addEventListener("mousemove", (event) => {
+    if (!sidebar) return;
+    if (event.clientX <= SHOW_ZONE_PX) {
+      sidebar.classList.remove("-translate-x-full");
+      sidebar.classList.add("translate-x-0");
+    } else if (!sidebar.matches(":hover")) {
+      sidebar.classList.add("-translate-x-full");
+      sidebar.classList.remove("translate-x-0");
+    }
+  });
+</script>
+ 
+ </body></html>

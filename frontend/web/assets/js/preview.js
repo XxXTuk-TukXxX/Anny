@@ -15,16 +15,137 @@ try {
 
 // -------- Backend integration helpers --------
 async function getPreviewUrl() {
+  const tryHttp = async () => {
+    try {
+      const res = await fetch('/api/preview');
+      const data = await res.json();
+      if (res.ok && data && data.data_url) return data.data_url;
+    } catch (_) {}
+    return null;
+  };
+  const tryHttpPdf = () => {
+    // Fallback to a direct PDF endpoint (file response) to avoid data URL issues
+    return '/api/preview_pdf?ts=' + Date.now();
+  };
   const tryApi = async () => {
     try { if (window.pywebview?.api?.get_preview_url) return await window.pywebview.api.get_preview_url(); } catch {}
     return null;
   };
-  let url = await tryApi();
+  let url = await tryHttp();
+  if (!url) url = await tryApi();
+  if (!url) url = tryHttpPdf();
   if (!url) {
     const start = Date.now();
     while (Date.now() - start < 2500) { await new Promise(r => setTimeout(r, 150)); url = await tryApi(); if (url) break; }
   }
   return url || "https://unec.edu.az/application/uploads/2014/12/pdf-sample.pdf";
+}
+
+async function getViewerSettings() {
+  const tryApi = async () => {
+    try {
+      if (window.pywebview?.api?.get_settings) return await window.pywebview.api.get_settings();
+    } catch (_) {}
+    return null;
+  };
+  const tryHttp = async () => {
+    try {
+      const r = await fetch('/api/settings');
+      const d = await r.json();
+      return (r.ok && d && typeof d === 'object') ? d : null;
+    } catch (_) {}
+    return null;
+  };
+  return (await tryApi()) || (await tryHttp());
+}
+
+function resolveNoteFontUrl(fontfile) {
+  try {
+    const f = (fontfile || '').trim();
+    if (!f) return null;
+    if (/^(https?:|file:|data:)/i.test(f)) return f;
+
+    // Desktop (pywebview) loads preview.html via file://...; resolve relative to repo root.
+    if (typeof window !== 'undefined' && window.location?.protocol === 'file:') {
+      const cleaned = f.replace(/\\/g, '/');
+      const isAbs = /^[a-zA-Z]:\//.test(cleaned) || cleaned.startsWith('/') || cleaned.startsWith('//');
+      if (isAbs) {
+        // Absolute filesystem path -> file:// URL
+        if (/^[a-zA-Z]:\//.test(cleaned)) return 'file:///' + encodeURI(cleaned);
+        if (cleaned.startsWith('/')) return 'file://' + encodeURI(cleaned);
+        return 'file:' + encodeURI(cleaned);
+      }
+      const rel = '../../' + cleaned.replace(/^\/+/, '');
+      return new URL(rel, window.location.href).toString();
+    }
+
+    // Flask mode: serve `fonts/*` via `/fonts/*`.
+    if (f.startsWith('fonts/')) return '/fonts/' + f.slice('fonts/'.length);
+    if (f.startsWith('/fonts/')) return f;
+
+    // Fallback: let the backend serve whatever font is currently configured.
+    return '/api/note_font?ts=' + Date.now();
+  } catch (_) {}
+  return null;
+}
+
+async function ensureNoteFontLoaded(fontName, fontfile) {
+  try {
+    const name = (fontName || '').trim();
+    const url = resolveNoteFontUrl(fontfile);
+    if (!name || !url) return;
+
+    const styleId = '__anny_note_font_face';
+    let style = document.getElementById(styleId);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = styleId;
+      document.head.appendChild(style);
+    }
+    style.textContent = `@font-face { font-family: \"${name}\"; src: url(\"${url}\"); font-weight: normal; font-style: normal; }`;
+
+    // Best-effort: wait for font to be available before drawing canvas text.
+    if (document.fonts?.load) {
+      await document.fonts.load(`16px \"${name}\"`);
+    }
+  } catch (_) {}
+}
+
+async function postJson(path, payload) {
+  try {
+    const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}) });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok && (data.ok !== false), data };
+  } catch (err) {
+    console.error('[preview] postJson failed', path, err);
+    return { ok: false, data: null };
+  }
+}
+
+async function setNoteRect(uid, x0, y0, x1, y1) {
+  if (window.pywebview?.api?.set_note_rect) return await window.pywebview.api.set_note_rect(uid, x0, y0, x1, y1);
+  const r = await postJson('/api/set_note_rect', { uid, x0, y0, x1, y1 });
+  return r.ok;
+}
+async function setNoteText(uid, text) {
+  if (window.pywebview?.api?.set_note_text) return await window.pywebview.api.set_note_text(uid, text);
+  const r = await postJson('/api/set_note_text', { uid, text });
+  return r.ok;
+}
+async function setNoteColor(uid, color) {
+  if (window.pywebview?.api?.set_note_color) return await window.pywebview.api.set_note_color(uid, color);
+  const r = await postJson('/api/set_note_color', { uid, color });
+  return r.ok;
+}
+async function setNoteFontSize(uid, size) {
+  if (window.pywebview?.api?.set_note_fontsize) return await window.pywebview.api.set_note_fontsize(uid, size);
+  const r = await postJson('/api/set_note_fontsize', { uid, size });
+  return r.ok;
+}
+async function setNoteRotation(uid, angle) {
+  if (window.pywebview?.api?.set_note_rotation) return await window.pywebview.api.set_note_rotation(uid, angle);
+  const r = await postJson('/api/set_note_rotation', { uid, angle });
+  return r.ok;
 }
 
 async function browseForPath(current) {
@@ -34,8 +155,37 @@ async function browseForPath(current) {
 
 async function exportEditedPdf(targetPath) {
   if (window.pywebview?.api?.export_pdf) return await window.pywebview.api.export_pdf(targetPath);
-  alert("Export hook not connected. Implement window.pywebview.api.export_pdf(path).");
-  return false;
+
+  // Web mode (Flask): download a baked PDF only when exporting.
+  try {
+    const raw = (targetPath || "annotated.pdf").toString();
+    const name = (raw.split(/[\\/]/).pop() || "annotated.pdf").trim() || "annotated.pdf";
+    const url = `/api/export_pdf?name=${encodeURIComponent(name)}&ts=${Date.now()}`;
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) {
+      let msg = `Export failed (${res.status})`;
+      try {
+        const data = await res.json();
+        if (data?.error) msg = String(data.error);
+      } catch (_) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    const objUrl = URL.createObjectURL(blob);
+    a.href = objUrl;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try { URL.revokeObjectURL(objUrl); } catch (_) {}
+      try { a.remove(); } catch (_) {}
+    }, 0);
+    return true;
+  } catch (e) {
+    alert('Export failed.\n' + (e?.message || e));
+    return false;
+  }
 }
 
 async function notifyFreezeLayout(on) {
@@ -52,6 +202,9 @@ async function notifyFreezeLayout(on) {
   let pendingPage = null;
   let zoom = 1.0; // user zoom multiplier (1.0 = fit)
   const ZOOM_MIN = 0.5, ZOOM_MAX = 4.0, ZOOM_STEP = 0.1;
+  const NOTE_PADDING_PTS = 4.0;
+  const WRAP_TIGHTNESS = 0.96;
+  const LINE_HEIGHT_FACTOR = 1.18;
 
   const canvas = document.getElementById('pdfCanvas');
   const ctx = canvas.getContext('2d', { alpha: false });
@@ -60,6 +213,7 @@ async function notifyFreezeLayout(on) {
   const overlay = document.getElementById('overlay');
   let dragState = null;
   let selectedUid = null;
+  let viewerSettings = null;
 
   const $pageNum = document.getElementById('pageNum');
   const $pageCount = document.getElementById('pageCount');
@@ -106,14 +260,31 @@ async function notifyFreezeLayout(on) {
     if (el) el.textContent = z + '%';
   }
 
-  async function renderFallbackPage(num) {
-    if (!window.pywebview?.api?.render_preview_page) return;
-    try { if (!window.__pageCount) { const info = await window.pywebview.api.get_preview_page_count(); window.__pageCount = info?.count || 1; } } catch {}
+async function renderFallbackPage(num) {
+    const useApi = !!(window.pywebview?.api?.render_preview_page);
+    if (useApi) {
+      try { if (!window.__pageCount) { const info = await window.pywebview.api.get_preview_page_count(); window.__pageCount = info?.count || 1; } } catch {}
+    } else {
+      try {
+        if (!window.__pageCount) {
+          const r = await fetch('/api/preview_page_count');
+          const d = await r.json();
+          window.__pageCount = d?.count || 1;
+        }
+      } catch (_) {}
+    }
     pageNum = Math.max(1, Math.min(num, window.__pageCount || 1));
     setPageInfo();
     const w = (canvasWrap.clientWidth - 32) * zoom;
     const h = Math.max(300, window.innerHeight * 0.75) * zoom;
-    const res = await window.pywebview.api.render_preview_page(pageNum - 1, Math.max(200, Math.round(w)), Math.max(200, Math.round(h)));
+    let res = null;
+    if (useApi) {
+      res = await window.pywebview.api.render_preview_page(pageNum - 1, Math.max(200, Math.round(w)), Math.max(200, Math.round(h)));
+    } else {
+      const r = await fetch(`/api/render_preview_page?page=${pageNum - 1}&w=${Math.max(200, Math.round(w))}&h=${Math.max(200, Math.round(h))}`);
+      res = await r.json();
+      if (!r.ok) throw new Error(res?.error || 'Render failed');
+    }
     console.log('[preview] renderFallbackPage', { pageNum, res });
     imgPage.src = res.data_url;
     imgPage.style.width = res.width_px + 'px';
@@ -176,6 +347,30 @@ async function notifyFreezeLayout(on) {
     else { if (window.__pageCount && pageNum >= window.__pageCount) return; pageNum++; await renderFallbackPage(pageNum); }
   });
   document.getElementById('refreshBtn')?.addEventListener('click', async () => { await refreshPreview(); });
+  document.getElementById('addBoxBtn')?.addEventListener('click', async () => {
+    try {
+      if (!overlayMeta) {
+        await loadOverlayMeta();
+      }
+      const pageIndex = Math.max(0, (pageNum || 1) - 1);
+      let width = parseFloat(overlay?.dataset.pageWidth || '');
+      let height = parseFloat(overlay?.dataset.pageHeight || '');
+      if (!isFinite(width) || width <= 0 || !isFinite(height) || height <= 0) {
+        const pageInfo = overlayMeta?.pages?.find(p => p.index === pageIndex);
+        width = pageInfo?.width || 600;
+        height = pageInfo?.height || 800;
+      }
+      const res = await createManualBoxAt(pageIndex, width / 2, height / 2);
+      if (!res || !res.uid) {
+        alert('Manual note request failed. Ensure manual mode is active.');
+      } else {
+        try { alert('Manual note created: ' + JSON.stringify(res)); } catch (_) {}
+      }
+    } catch (err) {
+      console.error('[preview] addBoxBtn click failed', err);
+      alert('Manual note request failed.');
+    }
+  });
 
   function clampZoom(z) { return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)); }
   async function applyZoom(newZoom) { zoom = clampZoom(newZoom); setZoomLabel(); if (!useImages && hasPdfJs) queueRender(pageNum); else await renderFallbackPage(pageNum); }
@@ -194,8 +389,20 @@ async function notifyFreezeLayout(on) {
   document.getElementById('autoToggle')?.addEventListener('change', (e) => {
     if (window.pywebview?.api?.set_auto_refresh) { try { window.pywebview.api.set_auto_refresh(!!e.target.checked); } catch {} }
   });
-  document.getElementById('browseBtn')?.addEventListener('click', async () => { const input = document.getElementById('exportPath'); input.value = await browseForPath(input.value); });
-  document.getElementById('exportBtn')?.addEventListener('click', async () => { const path = document.getElementById('exportPath').value || "annotated.pdf"; const ok = await exportEditedPdf(path); if (ok) { alert("Export complete:\n" + path); } });
+  document.getElementById('browseBtn')?.addEventListener('click', async () => {
+    const input = document.getElementById('exportPath');
+    if (!input) return;
+    input.value = await browseForPath(input.value);
+  });
+  document.getElementById('exportBtn')?.addEventListener('click', async () => {
+    const input = document.getElementById('exportPath');
+    const suggested = (input && input.value) ? input.value : "annotated.pdf";
+    const path = await browseForPath(suggested);
+    if (!path) return;
+    if (input) input.value = path;
+    const ok = await exportEditedPdf(path);
+    if (ok && window.pywebview?.api?.export_pdf) { alert("Export complete:\n" + path); }
+  });
 
   // Edit toolbar
   const $mainTb = document.getElementById('mainToolbar');
@@ -207,11 +414,49 @@ async function notifyFreezeLayout(on) {
   const $editColorInput = document.getElementById('editColorInput');
   const $editFontSizeInput = document.getElementById('editFontSizeInput');
   const $editNoteId = document.getElementById('editNoteId');
-  function enterEditMode(uid) { selectedUid = uid; try { const p = (overlayMeta?.placements || []).find(x => x.uid === uid); $editTextInput.value = (p && p.explanation) || ''; $editColorInput.value = (p && p.color) || '#ff9800'; } catch {} $editFontSizeInput.value = $editFontSizeInput.value || '9'; $editNoteId.textContent = uid ? ('#' + uid) : ''; $mainTb.classList.add('hidden'); $editTb.classList.remove('hidden'); }
+  function enterEditMode(uid) {
+    selectedUid = uid;
+    try {
+      const p = (overlayMeta?.placements || []).find(x => x.uid === uid);
+      $editTextInput.value = (p && p.explanation) || '';
+      $editColorInput.value = (p && p.color) || '#ff9800';
+      const fsz = (p && p.font_size) || viewerSettings?.note_fontsize || 9.0;
+      $editFontSizeInput.value = String(fsz || 9.0);
+    } catch (_) {
+      $editFontSizeInput.value = $editFontSizeInput.value || '9';
+    }
+    $editNoteId.textContent = uid ? ('#' + uid) : '';
+    $mainTb.classList.add('hidden');
+    $editTb.classList.remove('hidden');
+  }
   function exitEditMode() { $editTb.classList.add('hidden'); $mainTb.classList.remove('hidden'); $editNoteId.textContent=''; }
   $editBackBtn?.addEventListener('click', exitEditMode);
   $cancelEditBtn?.addEventListener('click', exitEditMode);
-  $saveEditBtn?.addEventListener('click', async () => { if (!selectedUid) { exitEditMode(); return; } const uid = selectedUid; const text = $editTextInput.value || ''; const color = $editColorInput.value || ''; const fsz = parseFloat($editFontSizeInput.value || '0'); try { if (window.pywebview?.api?.set_note_text) { await window.pywebview.api.set_note_text(uid, text); } if (window.pywebview?.api?.set_note_color && color) { await window.pywebview.api.set_note_color(uid, color); const el = overlay.querySelector('[data-uid="'+uid+'"]'); if (el) el.style.borderColor = color; } if (window.pywebview?.api?.set_note_fontsize && fsz > 0) { await window.pywebview.api.set_note_fontsize(uid, fsz); } if (document.getElementById('autoToggle')?.checked) { await refreshPreview(); } } catch (e) { console.error(e); } exitEditMode(); });
+  $saveEditBtn?.addEventListener('click', async () => {
+    if (!selectedUid) { exitEditMode(); return; }
+    const uid = selectedUid;
+    const text = $editTextInput.value || '';
+    const color = $editColorInput.value || '';
+    const fsz = parseFloat($editFontSizeInput.value || '0');
+    try {
+      const okText = await setNoteText(uid, text);
+      const okCol = color ? await setNoteColor(uid, color) : false;
+      const okFs = (fsz > 0) ? await setNoteFontSize(uid, fsz) : false;
+
+      const pl = (overlayMeta?.placements || []).find(x => x.uid === uid);
+      if (pl) {
+        if (okText) pl.explanation = text;
+        if (okCol) pl.color = color;
+        if (okFs) pl.font_size = fsz;
+      }
+
+      // Rebuild overlay (client-side only) so text wrapping/font size updates immediately.
+      try { drawOverlay(pageNum, overlay?.clientWidth || 1, overlay?.clientHeight || 1, null); } catch (_) {}
+    } catch (e) {
+      console.error(e);
+    }
+    exitEditMode();
+  });
 
   // Debug button
   const debugBtn = document.getElementById('debugBtn');
@@ -222,7 +467,7 @@ async function notifyFreezeLayout(on) {
     if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
     if (e.key === 'ArrowLeft') { document.getElementById('prevBtn')?.click(); }
     if (e.key === 'ArrowRight') { document.getElementById('nextBtn')?.click(); }
-    if (e.key.toLowerCase() === 'r') { document.getElementById('refreshBtn')?.click(); }
+    if (e.key.toLowerCase() === 'r' && !selectedUid) { document.getElementById('refreshBtn')?.click(); }
     if (e.key.toLowerCase() === 'e') { document.getElementById('exportBtn')?.click(); }
     const isMod = e.ctrlKey || e.metaKey;
     if (isMod && (e.key === '+' || e.key === '=')) { e.preventDefault(); applyZoom(zoom + ZOOM_STEP); }
@@ -239,32 +484,50 @@ async function notifyFreezeLayout(on) {
 
   async function refreshPreview() {
     try {
-      if (window.pywebview?.api) {
-        useImages = true;
-        await loadOverlayMeta();
-        try { console.log('[preview] overlayMeta', { pages: overlayMeta?.pages?.length || 0, placements: overlayMeta?.placements?.length || 0 }); } catch {}
-        await renderFallbackPage(pageNum);
-        return;
-      }
-      const url = await getPreviewUrl();
-      const finalUrl = url.startsWith('data:') ? url : (url + (url.includes('?') ? '&' : '?') + '_=' + Date.now());
-      await loadDocument(finalUrl);
+      // Fast preview: render the source PDF page and draw annotations as a live overlay.
+      // Baking into the PDF happens on export.
+      try {
+        const s = await getViewerSettings();
+        if (s && typeof s === 'object') {
+          viewerSettings = s;
+          const fontName = (viewerSettings?.note_fontname || 'AnnotateNote').toString().trim() || 'AnnotateNote';
+          await ensureNoteFontLoaded(fontName, viewerSettings?.note_fontfile);
+        }
+      } catch (_) {}
+
+      useImages = true;
       await loadOverlayMeta();
       try { console.log('[preview] overlayMeta', { pages: overlayMeta?.pages?.length || 0, placements: overlayMeta?.placements?.length || 0 }); } catch {}
-      if (!useImages && hasPdfJs && pdfDoc) { queueRender(pageNum); } else { await renderFallbackPage(pageNum); }
+      await renderFallbackPage(pageNum);
     } catch (e) {
       console.error(e);
       try { alert('Failed to load PDF preview.\n' + (e?.message||'')); } catch(_) { alert('Failed to load PDF preview.'); }
     }
   }
 
+  // Expose refreshPreview for manual refresh and integrations.
+  try {
+    window.refreshPreview = refreshPreview;
+  } catch (_) {}
+
   // Initial load
   (async function init() {
+    try {
+      viewerSettings = await getViewerSettings();
+      const fontName = (viewerSettings?.note_fontname || 'AnnotateNote').toString().trim() || 'AnnotateNote';
+      await ensureNoteFontLoaded(fontName, viewerSettings?.note_fontfile);
+    } catch (_) {}
     try { setZoomLabel(); } catch {}
     await refreshPreview();
     try { if (window.pywebview?.api?.get_freeze_layout) { const on = await window.pywebview.api.get_freeze_layout(); const cb = document.getElementById('freezeToggle'); cb.checked = !!on; cb.dispatchEvent(new Event('change')); } } catch {}
     window.addEventListener('error', (e) => console.error('[preview] window error', e?.message, e?.error));
     window.addEventListener('unhandledrejection', (e) => console.error('[preview] unhandled', e?.reason));
+    try {
+      attachContextListeners();
+      attachSecondaryButtonListeners();
+    } catch (err) {
+      console.error('[preview] failed to attach context listeners', err);
+    }
   })();
   document.addEventListener('pywebviewready', () => { try { refreshPreview(); } catch {} });
 
@@ -272,13 +535,98 @@ async function notifyFreezeLayout(on) {
   let overlayMeta = null;
   async function getPreviewMeta() {
     const tryApi = async () => { try { if (window.pywebview?.api?.get_preview_meta) return await window.pywebview.api.get_preview_meta(); } catch {} return null; };
+    const tryHttp = async () => {
+      try {
+        const r = await fetch('/api/preview_meta');
+        const d = await r.json();
+        return d?.pages ? d : null;
+      } catch (_) { return null; }
+    };
     let meta = await tryApi();
+    if (!meta) meta = await tryHttp();
     if (!meta) { const start = Date.now(); while (Date.now() - start < 2500) { await new Promise(r => setTimeout(r, 150)); meta = await tryApi(); if (meta) break; } }
     return meta;
   }
-  async function loadOverlayMeta() { overlayMeta = await getPreviewMeta(); }
+  async function loadOverlayMeta() {
+    const meta = await getPreviewMeta();
+    if (meta && typeof meta === 'object') {
+      meta.manual = !!meta.manual;
+      overlayMeta = meta;
+    } else {
+      overlayMeta = { pages: [], placements: [], manual: false };
+    }
+    dbg('overlayMeta loaded', overlayMeta);
+  }
+  let lastContextInfo = null;
   function px(n) { return Math.round(n) + 'px'; }
   function isFrozen() { const cb = document.getElementById('freezeToggle'); return !!(cb && cb.checked); }
+  function clampNonNeg(n) { return isFinite(n) && n > 0 ? n : 0; }
+
+  function wrapTextLines(text, maxWidthPx, ctx2d, tightness) {
+    const t = (text || '').toString();
+    const maxW = Math.max(1, maxWidthPx || 1);
+    const tight = (typeof tightness === 'number' && isFinite(tightness)) ? tightness : 1.0;
+
+    const measure = (s) => {
+      try {
+        return ctx2d.measureText(s).width || 0;
+      } catch (_) {
+        return 0;
+      }
+    };
+
+    const lines = [];
+    const parts = t.split(/\r?\n/);
+    if (!parts.length) return [''];
+    for (const para of parts) {
+      if (!para) { lines.push(''); continue; }
+      const words = para.trim().split(/\s+/).filter(Boolean);
+      if (!words.length) { lines.push(''); continue; }
+      let cur = words[0] || '';
+      for (const w of words.slice(1)) {
+        const next = cur ? (cur + ' ' + w) : w;
+        if (measure(next) * tight <= maxW) {
+          cur = next;
+        } else {
+          lines.push(cur);
+          cur = w;
+        }
+      }
+      lines.push(cur);
+    }
+    return lines.length ? lines : [''];
+  }
+
+  function renderNoteTextCanvas(canvasEl, text, innerW, innerH, fontPx, fontFamily, color) {
+    const w = clampNonNeg(innerW);
+    const h = clampNonNeg(innerH);
+    if (!canvasEl || w <= 0 || h <= 0 || !isFinite(fontPx) || fontPx <= 0) return;
+
+    const dpr = (window.devicePixelRatio || 1);
+    canvasEl.width = Math.max(1, Math.floor(w * dpr));
+    canvasEl.height = Math.max(1, Math.floor(h * dpr));
+    canvasEl.style.width = px(w);
+    canvasEl.style.height = px(h);
+
+    const c2 = canvasEl.getContext('2d');
+    if (!c2) return;
+    try {
+      c2.setTransform(dpr, 0, 0, dpr, 0, 0);
+      c2.clearRect(0, 0, w, h);
+      c2.fillStyle = color || '#ff9800';
+      c2.textAlign = 'left';
+      c2.textBaseline = 'alphabetic';
+      c2.font = `${fontPx}px ${fontFamily || 'sans-serif'}`;
+      const lines = wrapTextLines(text, w, c2, WRAP_TIGHTNESS);
+      const lh = LINE_HEIGHT_FACTOR * fontPx;
+      let y = fontPx;
+      for (const ln of lines) {
+        if (y > h) break;
+        try { c2.fillText(ln || '', 0, y); } catch (_) {}
+        y += lh;
+      }
+    } catch (_) {}
+  }
 
   function drawOverlay(num, canvasW, canvasH, pts) {
     if (!overlayMeta) { if (overlay) overlay.innerHTML=''; return; }
@@ -288,7 +636,37 @@ async function notifyFreezeLayout(on) {
     overlay.innerHTML='';
     const scaleX = canvasW / (pageInfo?.width || canvasW);
     const scaleY = canvasH / (pageInfo?.height || canvasH);
+    overlay.dataset.pageIndex = String(pageIndex);
+    overlay.dataset.scaleX = String(scaleX || 1);
+    overlay.dataset.scaleY = String(scaleY || 1);
+    overlay.dataset.pageWidth = String(pageInfo?.width || canvasW);
+    overlay.dataset.pageHeight = String(pageInfo?.height || canvasH);
     const placements = (overlayMeta.placements || []).filter(p => p.page_index === pageIndex);
+
+    // Highlight overlay (fast preview): show where the note refers to.
+    // We use the placement's anchor_rect (block around the hit) and match the
+    // baked PDF highlight opacity (0.25) from `highlights.py`.
+    for (const p of placements) {
+      try {
+        const ar = p.anchor_rect;
+        if (!ar || !Array.isArray(ar) || ar.length !== 4) continue;
+        const ax0 = ar[0] ?? 0, ay0 = ar[1] ?? 0, ax1 = ar[2] ?? 0, ay1 = ar[3] ?? 0;
+        const aw = (ax1 - ax0) * scaleX, ah = (ay1 - ay0) * scaleY;
+        if (!(aw > 0) || !(ah > 0)) continue;
+        const col = p.highlight_color || p.color || '#ff9800';
+        const hl = document.createElement('div');
+        hl.className = 'absolute';
+        hl.style.left = px(ax0 * scaleX);
+        hl.style.top = px(ay0 * scaleY);
+        hl.style.width = px(aw);
+        hl.style.height = px(ah);
+        hl.style.backgroundColor = col;
+        hl.style.opacity = '0.25';
+        hl.style.pointerEvents = 'none';
+        overlay.appendChild(hl);
+      } catch (_) {}
+    }
+
     for (const p of placements) {
       const x0 = p.note_rect?.[0] ?? 0, y0 = p.note_rect?.[1] ?? 0, x1 = p.note_rect?.[2] ?? 0, y1 = p.note_rect?.[3] ?? 0;
       const w = (x1 - x0) * scaleX, h = (y1 - y0) * scaleY;
@@ -298,34 +676,192 @@ async function notifyFreezeLayout(on) {
       el.className = 'absolute border-2 bg-transparent';
       el.style.left = px(left); el.style.top = px(top); el.style.width = px(w); el.style.height = px(h);
       el.style.borderColor = col;
+      try {
+        const rot = typeof p.rotation === 'number' ? p.rotation : 0;
+        if (isFinite(rot) && Math.abs(rot) > 0.01) {
+          el.style.transformOrigin = '50% 50%';
+          el.style.transform = `rotate(${rot}deg)`;
+        }
+      } catch (_) {}
       el.setAttribute('data-uid', p.uid);
       el.setAttribute('data-x0', String(x0)); el.setAttribute('data-y0', String(y0));
       el.setAttribute('data-x1', String(x1)); el.setAttribute('data-y1', String(y1));
       el.setAttribute('data-sx', String(scaleX)); el.setAttribute('data-sy', String(scaleY));
+
+      // Live text overlay (fast preview) — avoids re-baking notes into the PDF on every change.
+      try {
+        const padX = NOTE_PADDING_PTS * scaleX;
+        const padY = NOTE_PADDING_PTS * scaleY;
+        const innerW = Math.max(0, w - 2 * padX);
+        const innerH = Math.max(0, h - 2 * padY);
+        const fontPts = (typeof p.font_size === 'number' && isFinite(p.font_size) && p.font_size > 0)
+          ? p.font_size
+          : (typeof viewerSettings?.note_fontsize === 'number' ? viewerSettings.note_fontsize : 9.0);
+        const fontPx = fontPts * scaleY;
+        const fontName = (viewerSettings?.note_fontname || 'AnnotateNote').toString().trim() || 'AnnotateNote';
+        const fontFamily = `"${fontName}", Inter, "Noto Sans", system-ui, sans-serif`;
+        const tcv = document.createElement('canvas');
+        tcv.className = 'absolute';
+        tcv.style.left = px(padX);
+        tcv.style.top = px(padY);
+        tcv.style.pointerEvents = 'none';
+        renderNoteTextCanvas(tcv, (p.explanation || '').toString(), innerW, innerH, fontPx, fontFamily, col);
+        el.appendChild(tcv);
+      } catch (_) {}
+
       if (!isFrozen()) {
         const handle = document.createElement('div');
         handle.className = 'resize-handle';
         handle.setAttribute('data-role','resize');
         el.appendChild(handle);
       }
-      el.addEventListener('contextmenu', (e) => { e.preventDefault(); openCtxMenu(e.clientX, e.clientY, p.uid); });
       el.addEventListener('dblclick', () => { enterEditMode(p.uid); });
       overlay.appendChild(el);
     }
   }
 
-  function openCtxMenu(x, y, uid) {
+  async function createManualBoxAt(pageIndex, pageX, pageY) {
+    dbg('createManualBoxAt requested', { pageIndex, pageX, pageY, hasApi: !!(window.pywebview?.api?.create_manual_text_box) });
+    if (!window.pywebview?.api?.create_manual_text_box) {
+      alert('Manual text boxes are only available in the desktop app.');
+      return null;
+    }
+    try {
+      const res = await window.pywebview.api.create_manual_text_box(pageIndex, pageX, pageY);
+      dbg('create_manual_text_box result', res);
+      try { await loadOverlayMeta(); } catch (_) {}
+      try { drawOverlay(pageNum, overlay?.clientWidth || 1, overlay?.clientHeight || 1, null); } catch (_) {}
+      if (res && res.uid) {
+        setTimeout(() => enterEditMode(res.uid), 40);
+      }
+      return res;
+    } catch (e) {
+      console.error('[preview] create_manual_text_box failed', e);
+      alert('Failed to create manual text box.');
+      return null;
+    }
+  }
+
+  function openCtxMenu(x, y, opts) {
+    dbg('openCtxMenu', { x, y, opts });
     const m = document.getElementById('ctxMenu');
     if (!m) return;
+    const uid = opts?.uid || null;
+    const manual = opts?.manual !== undefined ? !!opts.manual : !!(overlayMeta?.manual);
+    lastContextInfo = {
+      uid,
+      manual,
+      pageIndex: opts?.pageIndex ?? 0,
+      pageX: opts?.pageX ?? 0,
+      pageY: opts?.pageY ?? 0,
+    };
     m.style.display = 'block';
     m.style.left = px(x);
     m.style.top = px(y);
-    const close = () => { m.style.display = 'none'; document.removeEventListener('click', close); };
+    const close = () => { m.style.display = 'none'; document.removeEventListener('click', close); lastContextInfo = null; };
     document.addEventListener('click', close);
     const editItem = document.getElementById('ctxEditText');
     if (editItem) {
-      editItem.onclick = () => { close(); enterEditMode(uid); };
+      if (uid) {
+        editItem.style.display = 'block';
+        editItem.onclick = () => { close(); enterEditMode(uid); };
+      } else {
+        editItem.style.display = 'none';
+        editItem.onclick = null;
+      }
     }
+    const addItem = document.getElementById('ctxAddText');
+    if (addItem) {
+      if (manual) {
+        addItem.style.display = 'block';
+        addItem.onclick = async () => {
+          const info = lastContextInfo;
+          close();
+          if (!info) return;
+          await createManualBoxAt(info.pageIndex, info.pageX, info.pageY);
+        };
+      } else {
+        addItem.style.display = 'none';
+        addItem.onclick = null;
+      }
+    }
+  }
+
+  function normalizeTarget(t) {
+    if (!t) return null;
+    if (t.nodeType === 3) return normalizeTarget(t.parentElement);
+    return t;
+  }
+
+  async function handleContextMenuEvent(e) {
+    let target = e.target;
+    target = normalizeTarget(target);
+    dbg('contextmenu event', { target, manual: overlayMeta?.manual, dataset: overlay ? { pageIndex: overlay.dataset.pageIndex, scaleX: overlay.dataset.scaleX, scaleY: overlay.dataset.scaleY } : null });
+    if (!target) return;
+    if (!overlayMeta) {
+      try { await loadOverlayMeta(); } catch (_) {}
+    }
+    const manualEnabled = !!(overlayMeta?.manual);
+    const noteEl = target.closest ? target.closest('[data-uid]') : null;
+    if (!noteEl && !manualEnabled) {
+      console.debug('[preview] contextmenu ignored (manual off)', { target, manual: manualEnabled });
+      return;
+    }
+    console.debug('[preview] contextmenu captured', { manual: manualEnabled, tag: target?.tagName, clientX: e.clientX, clientY: e.clientY, dataset: overlay?.dataset });
+    if (!overlay) return;
+    e.preventDefault();
+    if (!overlay.dataset.scaleX) {
+      // ensure overlay metadata reflects current viewport
+      drawOverlay(pageNum, overlay.clientWidth || 1, overlay.clientHeight || 1, null);
+    }
+    let scaleX = parseFloat(overlay.dataset.scaleX || '1');
+    let scaleY = parseFloat(overlay.dataset.scaleY || '1');
+    if (!isFinite(scaleX) || scaleX === 0) scaleX = 1;
+    if (!isFinite(scaleY) || scaleY === 0) scaleY = 1;
+    let pageIndex = parseInt(overlay.dataset.pageIndex || '', 10);
+    if (!isFinite(pageIndex)) {
+      pageIndex = Math.max(0, (pageNum || 1) - 1);
+    }
+    const rect = overlay.getBoundingClientRect();
+    const offsetX = Math.max(0, e.clientX - rect.left);
+    const offsetY = Math.max(0, e.clientY - rect.top);
+    const opts = {
+      uid: noteEl ? noteEl.getAttribute('data-uid') : null,
+      manual: manualEnabled,
+      pageIndex,
+      pageX: offsetX / scaleX,
+      pageY: offsetY / scaleY,
+    };
+    openCtxMenu(e.clientX, e.clientY, opts);
+  }
+
+  function attachContextListeners() {
+    overlay.addEventListener('contextmenu', (e) => {
+      const target = e.target;
+      const noteEl = target && target.closest ? target.closest('[data-uid]') : null;
+      if (!noteEl) {
+        return; // allow default browser menu when not on a note
+      }
+      e.preventDefault();
+      handleContextMenuEvent(e);
+    }, true);
+  }
+
+  function isSecondaryButton(e) {
+    if (!e) return false;
+    if (typeof e.button === 'number') return e.button === 2;
+    if (typeof e.which === 'number') return e.which === 3;
+    return false;
+  }
+
+  async function handleSecondaryMouse(e) {
+    if (!isSecondaryButton(e)) return;
+    e.preventDefault();
+    await handleContextMenuEvent(e);
+  }
+
+  function attachSecondaryButtonListeners() {
+    overlay.addEventListener('mouseup', handleSecondaryMouse, true);
   }
 
   overlay.addEventListener('mousedown', (e) => {
@@ -375,8 +911,10 @@ async function notifyFreezeLayout(on) {
     const y1 = parseFloat(dragState.el.getAttribute('data-y1') || '0');
     dragState = null;
     try {
-      if (window.pywebview?.api?.set_note_rect) { await window.pywebview.api.set_note_rect(uid, x0, y0, x1, y1); }
-      if (document.getElementById('autoToggle')?.checked) { await refreshPreview(); }
+      await setNoteRect(uid, x0, y0, x1, y1);
+      const pl = (overlayMeta?.placements || []).find(x => x.uid === uid);
+      if (pl) pl.note_rect = [x0, y0, x1, y1];
+      try { drawOverlay(pageNum, overlay?.clientWidth || 1, overlay?.clientHeight || 1, null); } catch (_) {}
     } catch {}
   });
 
@@ -387,13 +925,31 @@ async function notifyFreezeLayout(on) {
     try {
       if (e.key.toLowerCase() === 'f') {
         const v = prompt('Set font size (pt):');
-        if (v && window.pywebview?.api?.set_note_fontsize) { await window.pywebview.api.set_note_fontsize(selectedUid, parseFloat(v)); await refreshPreview(); }
+        if (v) {
+          const fs = parseFloat(v);
+          const ok = await setNoteFontSize(selectedUid, fs);
+          const pl = (overlayMeta?.placements || []).find(x => x.uid === selectedUid);
+          if (ok && pl && isFinite(fs) && fs > 0) pl.font_size = fs;
+          try { drawOverlay(pageNum, overlay?.clientWidth || 1, overlay?.clientHeight || 1, null); } catch (_) {}
+        }
       } else if (e.key.toLowerCase() === 'c') {
         const v = prompt('Set text color (#RRGGBB or named color):');
-        if (v && window.pywebview?.api?.set_note_color) { await window.pywebview.api.set_note_color(selectedUid, v.trim()); await refreshPreview(); }
+        if (v) {
+          const col = v.trim();
+          const ok = await setNoteColor(selectedUid, col);
+          const pl = (overlayMeta?.placements || []).find(x => x.uid === selectedUid);
+          if (ok && pl && col) pl.color = col;
+          try { drawOverlay(pageNum, overlay?.clientWidth || 1, overlay?.clientHeight || 1, null); } catch (_) {}
+        }
       } else if (e.key.toLowerCase() === 'r') {
         const v = prompt('Set rotation (degrees):');
-        if (v && window.pywebview?.api?.set_note_rotation) { await window.pywebview.api.set_note_rotation(selectedUid, parseFloat(v)); await refreshPreview(); }
+        if (v) {
+          const rot = parseFloat(v);
+          const ok = await setNoteRotation(selectedUid, rot);
+          const pl = (overlayMeta?.placements || []).find(x => x.uid === selectedUid);
+          if (ok && pl && isFinite(rot)) pl.rotation = rot;
+          try { drawOverlay(pageNum, overlay?.clientWidth || 1, overlay?.clientHeight || 1, null); } catch (_) {}
+        }
       }
     } catch {}
   });
@@ -420,3 +976,6 @@ async function notifyFreezeLayout(on) {
     else if (sbtn && sbtn.attachEvent) sbtn.attachEvent('onclick', openSettings);
   })();
 })();
+  function dbg(...args) {
+    try { console.debug('[preview]', ...args); } catch (_) {}
+  }

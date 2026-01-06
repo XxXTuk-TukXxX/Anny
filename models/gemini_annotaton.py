@@ -39,7 +39,7 @@ def annotate_txt_file(
     *,
     outfile: str | None = None,
     model: str = "gemini-2.5-flash",
-    max_items_hint: int = 12,
+    max_items_hint: int = 24,
 ) -> list[dict]:
     """
     Read a .txt file, send it with the user's objective to Gemini,
@@ -78,7 +78,7 @@ GENERAL RULES
 - Only include sentences/clauses that appear verbatim in SOURCE TEXT.
 - Avoid duplicates; focus on the most relevant items for OBJECTIVE.
 - Prefer complete sentences; a shorter clause is okay if it is a meaningful highlight.
-- Return at most ~{max_items_hint} items.
+- Try to return ~{max_items_hint} items.
 - Output must match the schema exactly; no extra fields or prose.
 
 OBJECTIVE:

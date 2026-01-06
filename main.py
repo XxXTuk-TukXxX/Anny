@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import tempfile
@@ -24,6 +25,9 @@ from highlights import highlight_and_margin_comment_pdf, _import_fitz
 # Debug flag controlled by env var ANNOTATE_DEBUG=1
 DEBUG = str(os.environ.get("ANNOTATE_DEBUG", "")).strip().lower() in ("1", "true", "yes")
 
+_TK_DIALOG_ARG = "--tk-dialog"
+_TK_DIALOG_PAYLOAD_ENV = "ANNY_TK_DIALOG_PAYLOAD"
+
 def _log(*args: Any) -> None:
     if DEBUG:
         try:
@@ -32,37 +36,62 @@ def _log(*args: Any) -> None:
             pass
 
 
+def _run_tk_dialog_child() -> None:
+    payload_b64 = os.environ.get(_TK_DIALOG_PAYLOAD_ENV)
+    if not payload_b64:
+        return
+    try:
+        payload = json.loads(base64.b64decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return
+
+    method = payload.pop("_method", "askopenfilename")
+    options = {k: v for k, v in payload.items() if v is not None}
+    filetypes = options.get("filetypes")
+    if isinstance(filetypes, list):
+        options["filetypes"] = [tuple(item) for item in filetypes]
+
+    result: Any = None
+    root = None
+    try:
+        from tkinter import Tk, filedialog  # deferred import keeps main process lean
+
+        root = Tk()
+        root.withdraw()
+        dialog = getattr(filedialog, method)
+        result = dialog(**options)
+        if isinstance(result, tuple):
+            result = list(result)
+    except Exception:
+        result = None
+    finally:
+        try:
+            if root is not None:
+                root.destroy()
+        except Exception:
+            pass
+
+    try:
+        json.dump(result, sys.stdout)
+    except Exception:
+        pass
+
+
+if _TK_DIALOG_ARG in sys.argv[1:]:
+    _run_tk_dialog_child()
+    sys.exit(0)
+
+
 def _spawn_tk_dialog(method: str, **options: Any) -> Optional[Any]:
     """Invoke a Tk file dialog in a helper process and return the result."""
 
-    script = r"""
-import json
-import sys
-
-cfg = json.load(sys.stdin)
-method = cfg.pop("_method")
-
-from tkinter import Tk, filedialog
-
-root = Tk()
-root.withdraw()
-for key in list(cfg):
-    if cfg[key] is None:
-        cfg.pop(key)
-filetypes = cfg.get("filetypes")
-if isinstance(filetypes, list):
-    cfg["filetypes"] = [tuple(item) for item in filetypes]
-dialog = getattr(filedialog, method)
-result = dialog(**cfg)
-if isinstance(result, tuple):
-    result = list(result)
-root.destroy()
-
-json.dump(result, sys.stdout)
-"""
-
     payload = dict(options)
     payload["_method"] = method
+    try:
+        payload_encoded = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
+    except Exception:
+        return None
+
     creationflags = 0
     startupinfo = None
     if sys.platform.startswith("win"):
@@ -75,15 +104,23 @@ json.dump(result, sys.stdout)
             creationflags = 0
             startupinfo = None
 
+    args = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        args.append(str(Path(__file__).resolve()))
+    args.append(_TK_DIALOG_ARG)
+
+    env = os.environ.copy()
+    env[_TK_DIALOG_PAYLOAD_ENV] = payload_encoded
+
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", script],
-            input=json.dumps(payload).encode("utf-8"),
+            args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
             creationflags=creationflags,
             startupinfo=startupinfo,
+            env=env,
         )
     except Exception as exc:  # pragma: no cover - best effort fallback
         _log("tk dialog spawn failed", type(exc).__name__, str(exc))
@@ -184,7 +221,7 @@ _OCR_PDF: Optional[str] = None
 _ANN_JSON: Optional[str] = None
 _PREVIEW_PDF: Optional[str] = None
 _FREEZE_LAYOUT: bool = False
-_AUTO_REFRESH: bool = False
+_AUTO_REFRESH: bool = True
 _PLACEMENTS = None  # type: ignore
 _PAGE_SIZES: dict[int, tuple[int, int]] = {}
 _FIXED_OVERRIDES: dict[str, tuple[float, float, float, float]] = {}
@@ -194,10 +231,99 @@ _NOTE_TEXT_OVERRIDES: dict[str, str] = {}
 _NOTE_COLOR_OVERRIDES: dict[str, str] = {}
 _NOTE_FONTSIZE_OVERRIDES: dict[str, float] = {}
 _ROTATION_OVERRIDES: dict[str, float] = {}
+_MANUAL_MODE: bool = False
+_MANUAL_UID_COUNTER: int = 0
 
 
 def _wnd():
     return webview.windows[0] if webview and webview.windows else None
+
+
+def _reset_annotation_state(manual: bool | None = None) -> None:
+    """Reset placement/override state. If manual is provided, also flip mode."""
+    global _PLACEMENTS, _FIXED_OVERRIDES, _NOTE_TEXT_OVERRIDES, _NOTE_COLOR_OVERRIDES
+    global _NOTE_FONTSIZE_OVERRIDES, _ROTATION_OVERRIDES, _PAGE_SIZES, _PREVIEW_PDF
+    global _MANUAL_MODE, _MANUAL_UID_COUNTER
+    if manual is not None:
+        _MANUAL_MODE = bool(manual)
+    _MANUAL_UID_COUNTER = 0
+    _PLACEMENTS = [] if _MANUAL_MODE else None
+    try:
+        _FIXED_OVERRIDES.clear(); _NOTE_TEXT_OVERRIDES.clear(); _NOTE_COLOR_OVERRIDES.clear()
+        _NOTE_FONTSIZE_OVERRIDES.clear(); _ROTATION_OVERRIDES.clear()
+    except Exception:
+        pass
+    try:
+        _PAGE_SIZES.clear()
+    except Exception:
+        pass
+    _PREVIEW_PDF = None
+
+
+def _ensure_page_sizes(pdf_path: str) -> None:
+    global _PAGE_SIZES
+    if _PAGE_SIZES:
+        return
+    try:
+        fitz = _import_fitz()
+        doc = fitz.open(pdf_path)
+        sizes = {}
+        for i, pg in enumerate(doc):
+            sizes[i] = (int(pg.rect.width), int(pg.rect.height))
+        doc.close()
+        _PAGE_SIZES = sizes
+        _log("page_sizes", {"count": len(sizes)})
+    except Exception as exc:
+        _PAGE_SIZES = {}
+        _log("page_sizes_failed", type(exc).__name__, str(exc))
+
+
+def _manual_queries_payload() -> tuple[list[str], dict[str, str]]:
+    placements = globals().get('_PLACEMENTS') or []
+    queries: list[str] = []
+    comments: dict[str, str] = {}
+    seen: set[str] = set()
+    for pl in placements:
+        try:
+            uid = getattr(pl, 'uid', None)
+            if uid is None:
+                uid = pl.get('uid')  # type: ignore[attr-defined]
+            q = getattr(pl, 'query', None)
+            if q is None:
+                q = pl.get('query')  # type: ignore[attr-defined]
+        except Exception:
+            uid = None; q = None
+        if not q:
+            q = f"manual_{uid or len(queries)+1}"
+            try:
+                if hasattr(pl, 'query'):
+                    setattr(pl, 'query', q)
+                else:
+                    pl['query'] = q  # type: ignore[index]
+            except Exception:
+                pass
+        if q not in seen:
+            seen.add(q)
+            queries.append(q)
+        try:
+            exp = getattr(pl, 'explanation', '')
+        except Exception:
+            exp = pl.get('explanation', '') if isinstance(pl, dict) else ''
+        comments[q] = str(exp or '')
+    if not queries:
+        queries = ['__manual__']
+        comments['__manual__'] = ''
+    return queries, comments
+
+
+def _next_manual_uid() -> str:
+    global _MANUAL_UID_COUNTER
+    _MANUAL_UID_COUNTER += 1
+    return f"manual_{_MANUAL_UID_COUNTER:04d}"
+
+
+def _is_manual_mode() -> bool:
+    return bool(_MANUAL_MODE)
 
 
 def begin_ocr() -> bool:
@@ -230,18 +356,9 @@ def begin_ocr() -> bool:
     _SRC_PDF = str(paths[0])
 
     # Reset any previous annotation/placement state when a new PDF is selected
-    global _ANN_JSON, _PLACEMENTS, _FIXED_OVERRIDES, _NOTE_TEXT_OVERRIDES, _NOTE_FONTSIZE_OVERRIDES, _ROTATION_OVERRIDES, _PAGE_SIZES, _PREVIEW_PDF
+    global _ANN_JSON
     _ANN_JSON = None
-    _PLACEMENTS = None
-    try:
-        _FIXED_OVERRIDES.clear(); _NOTE_TEXT_OVERRIDES.clear(); _NOTE_FONTSIZE_OVERRIDES.clear(); _ROTATION_OVERRIDES.clear()
-    except Exception:
-        pass
-    try:
-        _PAGE_SIZES.clear()
-    except Exception:
-        pass
-    _PREVIEW_PDF = None
+    _reset_annotation_state(manual=False)
 
     # Swap to loading UI after returning to JS to avoid callback race
     if w and _LOADING_URL:
@@ -302,7 +419,13 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         return None, None
 
     root = _app_root()
-    _SELECT_URL = (root / "frontend" / "web" / "select.html").resolve().as_uri()
+    # Prefer the new upload landing page; fall back to older names if needed
+    select_path = (root / "frontend" / "web" / "upload.html")
+    if not select_path.exists():
+        select_path = (root / "frontend" / "web" / "select.html")
+    if not select_path.exists():
+        select_path = (root / "frontend" / "web" / "get_started.html")
+    _SELECT_URL = select_path.resolve().as_uri()
     _LOADING_URL = (root / "frontend" / "web" / "loading.html").resolve().as_uri()
     # Step 2 (new)
     global _GET_STARTED_URL, _AI_PROMPT_URL, _AI_WORKING_URL, _PREVIEW_URL, _SETTINGS_URL
@@ -372,12 +495,38 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 return False
 
             # Record and move to preview
-            global _ANN_JSON, _PLACEMENTS, _FIXED_OVERRIDES, _NOTE_TEXT_OVERRIDES, _NOTE_COLOR_OVERRIDES, _NOTE_FONTSIZE_OVERRIDES, _ROTATION_OVERRIDES, _PAGE_SIZES, _PREVIEW_PDF
+            global _ANN_JSON
             _ANN_JSON = p
-            _PLACEMENTS = None
-            _FIXED_OVERRIDES.clear(); _NOTE_TEXT_OVERRIDES.clear(); _NOTE_COLOR_OVERRIDES.clear(); _NOTE_FONTSIZE_OVERRIDES.clear(); _ROTATION_OVERRIDES.clear(); _PAGE_SIZES.clear()
-            _PREVIEW_PDF = None
+            _reset_annotation_state(manual=False)
             # Important: navigate AFTER returning value to JS to avoid callback teardown
+            def _go():
+                ww = _wnd()
+                try:
+                    if ww and _PREVIEW_URL:
+                        ww.load_url(_PREVIEW_URL)
+                except Exception:
+                    pass
+            try:
+                threading.Timer(0.05, _go).start()
+            except Exception:
+                pass
+            return True
+
+        def start_manual_mode(self):
+            """Skip annotations and jump directly to manual placement mode."""
+            pdf_path = _OCR_PDF or _SRC_PDF
+            if not pdf_path:
+                return False
+            global _ANN_JSON
+            _ANN_JSON = None
+            _reset_annotation_state(manual=True)
+            try:
+                _ensure_page_sizes(pdf_path)
+            except Exception:
+                pass
+
+            _log("start_manual_mode", {"pdf": pdf_path, "manual": _MANUAL_MODE})
+            w = _wnd()
             def _go():
                 ww = _wnd()
                 try:
@@ -434,7 +583,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     return None
 
             def worker():
-                global _ANN_JSON, _PLACEMENTS, _FIXED_OVERRIDES, _NOTE_TEXT_OVERRIDES, _NOTE_COLOR_OVERRIDES, _NOTE_FONTSIZE_OVERRIDES, _ROTATION_OVERRIDES, _PAGE_SIZES, _PREVIEW_PDF
+                global _ANN_JSON
                 pdf_path = _OCR_PDF or _SRC_PDF or ""
                 txt_path = _extract_pdf_text_to_temp(pdf_path)
                 if not txt_path:
@@ -471,9 +620,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     return
 
                 _ANN_JSON = out_json
-                _PLACEMENTS = None
-                _FIXED_OVERRIDES.clear(); _NOTE_TEXT_OVERRIDES.clear(); _NOTE_COLOR_OVERRIDES.clear(); _NOTE_FONTSIZE_OVERRIDES.clear(); _ROTATION_OVERRIDES.clear(); _PAGE_SIZES.clear()
-                _PREVIEW_PDF = None
+                _reset_annotation_state(manual=False)
                 # Go to preview page
                 try:
                     ww = _wnd()
@@ -493,9 +640,11 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             """Build a preview PDF and return a data URL (base64) for the viewer."""
             pdf_path = _OCR_PDF or _SRC_PDF
             ann = _ANN_JSON
-            if not pdf_path or not ann:
-                raise RuntimeError("Missing PDF or annotations JSON.")
-            _log("get_preview_url", {"pdf": pdf_path, "ann": ann})
+            manual = _is_manual_mode()
+            if not pdf_path or (not ann and not manual):
+                _log("get_preview_url:missing", {"pdf": bool(pdf_path), "ann": bool(ann), "manual": manual})
+                raise RuntimeError("Missing PDF or annotations input.")
+            _log("get_preview_url", {"pdf": pdf_path, "ann": ann, "manual": manual})
 
             # Prepare output path in temp dir
             fd, tmp_pdf = tempfile.mkstemp(suffix="_preview.pdf")
@@ -514,6 +663,11 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             # Ensure placements and page sizes computed once per input
             def _ensure_plan():
                 global _PLACEMENTS, _PAGE_SIZES
+                if manual:
+                    if _PLACEMENTS is None:
+                        globals()['_PLACEMENTS'] = []
+                    _ensure_page_sizes(pdf_path)
+                    return
                 if _PLACEMENTS is None:
                     try:
                         _, _hi, _notes, _skipped, placements = highlight_and_margin_comment_pdf(
@@ -545,17 +699,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     except Exception as e:
                         raise RuntimeError(f"Failed to compute placements: {type(e).__name__}: {e}")
                 if not _PAGE_SIZES:
-                    try:
-                        fitz = _import_fitz()
-                        doc = fitz.open(pdf_path)
-                        sizes = {}
-                        for i, pg in enumerate(doc):
-                            sizes[i] = (int(pg.rect.width), int(pg.rect.height))
-                        doc.close()
-                        globals()['_PAGE_SIZES'] = sizes
-                        _log("page_sizes", {"count": len(sizes)})
-                    except Exception:
-                        globals()['_PAGE_SIZES'] = {}
+                    _ensure_page_sizes(pdf_path)
 
             _ensure_plan()
 
@@ -605,6 +749,11 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 except Exception:
                     frz = []
 
+                queries = []
+                comments = {}
+                if manual:
+                    queries, comments = _manual_queries_payload()
+
                 _log("render_preview", {
                     "fixed": len(_FIXED_OVERRIDES or {}),
                     "text_over": len(_NOTE_TEXT_OVERRIDES or {}),
@@ -614,9 +763,9 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 })
                 highlight_and_margin_comment_pdf(
                     pdf_path=pdf_path,
-                    queries=[],
-                    comments={},
-                    annotations_json=ann,
+                    queries=queries,
+                    comments=comments,
+                    annotations_json=ann if not manual else None,
                     out_path=tmp_pdf,
                     note_width=int(settings.get("note_width", 240)),
                     min_note_width=int(settings.get("min_note_width", 48)),
@@ -673,53 +822,69 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         def get_preview_meta(self):
             pdf_path = _OCR_PDF or _SRC_PDF
             ann = _ANN_JSON
-            if not pdf_path or not ann:
+            manual = _is_manual_mode()
+            if not pdf_path or (not ann and not manual):
                 return {"pages": [], "placements": []}
-            # Ensure plan and sizes
-            try:
-                _ = self.get_preview_url()  # ensures _PLACEMENTS and _PAGE_SIZES populated and preview up-to-date
-            except Exception:
-                pass
-            # If placements are still missing, compute them now
-            if not (globals().get('_PLACEMENTS')):
+            settings = _resolved_settings()
+
+            # Ensure plan + sizes exist (without building a baked preview PDF).
+            if manual:
+                if globals().get("_PLACEMENTS") is None:
+                    globals()["_PLACEMENTS"] = []
+            else:
+                if globals().get("_PLACEMENTS") is None:
+                    try:
+                        _, _hi, _notes, _skipped, placements = highlight_and_margin_comment_pdf(
+                            pdf_path=pdf_path,
+                            queries=[],
+                            comments={},
+                            annotations_json=ann,
+                            plan_only=True,
+                            note_width=int(settings.get("note_width", 240)),
+                            min_note_width=int(settings.get("min_note_width", 48)),
+                            note_fontsize=float(settings.get("note_fontsize", 9.0)),
+                            note_fill=None if not settings.get("note_fill") else settings.get("note_fill"),
+                            note_border=None if not settings.get("note_border") else settings.get("note_border"),
+                            note_border_width=int(settings.get("note_border_width", 0)),
+                            note_text=settings.get("note_text", "red"),
+                            draw_leader=bool(settings.get("draw_leader", False)),
+                            leader_color=None if not settings.get("leader_color") else settings.get("leader_color"),
+                            allow_column_footer=bool(settings.get("allow_column_footer", True)),
+                            column_footer_max_offset=int(settings.get("column_footer_max_offset", 250)),
+                            max_vertical_offset=int(settings.get("max_vertical_offset", 90)),
+                            max_scan=int(settings.get("max_scan", 420)),
+                            side=settings.get("side", "outer"),
+                            allow_center_gutter=bool(settings.get("allow_center_gutter", True)),
+                            center_gutter_tolerance=float(settings.get("center_gutter_tolerance", 48.0)),
+                            dedupe_scope=str(settings.get("dedupe_scope", "page")),
+                            note_fontname=settings.get("note_fontname", DEFAULTS.get("note_fontname", "AnnotateNote")),
+                            note_fontfile=settings.get("note_fontfile"),
+                        )
+                        globals()["_PLACEMENTS"] = placements
+                        _log("meta: plan_only computed", {"placements": len(placements)})
+                    except Exception:
+                        globals()["_PLACEMENTS"] = []
+
+            if not (globals().get("_PAGE_SIZES") or {}):
                 try:
-                    settings = _resolved_settings()
-                    _, _hi, _notes, _skipped, placements = highlight_and_margin_comment_pdf(
-                        pdf_path=pdf_path,
-                        queries=[], comments={}, annotations_json=ann,
-                        plan_only=True,
-                        note_width=int(settings.get("note_width", 240)),
-                        min_note_width=int(settings.get("min_note_width", 48)),
-                        note_fontsize=float(settings.get("note_fontsize", 9.0)),
-                        note_fill=settings.get("note_fill"),
-                        note_border=settings.get("note_border"),
-                        note_border_width=int(settings.get("note_border_width", 0)),
-                        note_text=settings.get("note_text", "red"),
-                        draw_leader=bool(settings.get("draw_leader", False)),
-                        leader_color=settings.get("leader_color"),
-                        allow_column_footer=bool(settings.get("allow_column_footer", True)),
-                        column_footer_max_offset=int(settings.get("column_footer_max_offset", 250)),
-                        max_vertical_offset=int(settings.get("max_vertical_offset", 90)),
-                        max_scan=int(settings.get("max_scan", 420)),
-                        side=settings.get("side", "outer"),
-                        allow_center_gutter=bool(settings.get("allow_center_gutter", True)),
-                        center_gutter_tolerance=float(settings.get("center_gutter_tolerance", 48.0)),
-                        dedupe_scope=str(settings.get("dedupe_scope", "page")),
-                        note_fontname=settings.get("note_fontname", DEFAULTS.get("note_fontname", "AnnotateNote")),
-                        note_fontfile=settings.get("note_fontfile"),
-                    )
-                    globals()['_PLACEMENTS'] = placements
-                    _log("meta: recomputed plan", {"placements": len(placements)})
+                    _ensure_page_sizes(pdf_path)
                 except Exception:
                     pass
-            cmap = {}
-            try:
-                cmap = build_color_map(ann, fallback="#ff9800")
-            except Exception:
-                pass
+            ann_colors = {}
+            if not manual:
+                try:
+                    # Empty fallback lets us distinguish "no color provided" from "color provided".
+                    ann_colors = build_color_map(ann, fallback="")
+                except Exception:
+                    pass
             # Per-note overrides (color and text)
             color_overrides = globals().get('_NOTE_COLOR_OVERRIDES') or {}
             text_overrides = globals().get('_NOTE_TEXT_OVERRIDES') or {}
+            fontsize_overrides = globals().get('_NOTE_FONTSIZE_OVERRIDES') or {}
+            rotation_overrides = globals().get('_ROTATION_OVERRIDES') or {}
+            default_fontsize = float(settings.get("note_fontsize", 9.0))
+            default_note_text = str(settings.get("note_text") or "red").strip() or "red"
+            default_highlight = "yellow"
 
             placements = []
             pls = globals().get('_PLACEMENTS') or []
@@ -754,6 +919,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     uid = _get(pl, 'uid', 'uid')
                     pg = _get(pl, 'page_index', 'page_index')
                     rect = _get(pl, 'note_rect', 'note_rect')
+                    anchor = _get(pl, 'anchor_rect', 'anchor_rect')
                     if uid is None or pg is None or rect is None:
                         continue
                     pg = int(pg)
@@ -762,6 +928,12 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     rt = _rect_tuple_any(rect)
                     if not rt:
                         continue
+                    at = None
+                    try:
+                        if anchor is not None:
+                            at = _rect_tuple_any(anchor)
+                    except Exception:
+                        at = None
                     q = _get(pl, 'query', 'query')
                     exp = _get(pl, 'explanation', 'explanation')
                     # Apply per-note text override if present (used to prefill editor prompt)
@@ -771,6 +943,12 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     except Exception:
                         pass
                     # Resolve color: per-note override wins over per-query color map
+                    ann_col = ""
+                    try:
+                        ann_col = (str(ann_colors.get(q) or "") if q else "").strip()
+                    except Exception:
+                        ann_col = ""
+                    highlight_col = ann_col or default_highlight
                     col = None
                     try:
                         if uid and uid in color_overrides and color_overrides.get(uid):
@@ -778,24 +956,45 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     except Exception:
                         col = None
                     if not col:
-                        col = cmap.get(q, '#ff9800')
+                        col = ann_col or default_note_text
+                    fsz = default_fontsize
+                    try:
+                        ov = fontsize_overrides.get(str(uid))
+                        if ov is not None and float(ov) > 0:
+                            fsz = float(ov)
+                    except Exception:
+                        pass
+                    rot = 0.0
+                    try:
+                        rv = rotation_overrides.get(str(uid))
+                        if rv is not None:
+                            rot = float(rv)
+                    except Exception:
+                        rot = 0.0
                     placements.append({
                         'uid': uid,
                         'page_index': pg,
-                        'rect': rt,
+                        'note_rect': rt,
+                        'anchor_rect': at,
                         'query': q,
                         'explanation': exp,
                         'color': col,
+                        'highlight_color': highlight_col,
+                        'font_size': fsz,
+                        'rotation': rot,
                     })
                 except Exception:
                     continue
             pages = [{ 'index': i, 'width': w, 'height': h } for i, (w, h) in (globals().get('_PAGE_SIZES') or {}).items()]
-            _log("get_preview_meta", {"pages": len(pages), "placements": len(placements)})
-            return { 'pages': pages, 'placements': placements }
+            _log("get_preview_meta", {"pages": len(pages), "placements": len(placements), "manual": manual})
+            return { 'pages': pages, 'placements': placements, 'manual': manual }
 
         def get_preview_page_count(self):
+            pdf_path = _OCR_PDF or _SRC_PDF
+            if not pdf_path:
+                return {'count': 0, 'pages': []}
             try:
-                _ = self.get_preview_url()  # ensure preview PDF exists and sizes populated
+                _ensure_page_sizes(pdf_path)
             except Exception:
                 pass
             sizes = globals().get('_PAGE_SIZES') or {}
@@ -803,14 +1002,9 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             return { 'count': len(sizes), 'pages': [{ 'index': i, 'width': w, 'height': h } for i,(w,h) in sizes.items()] }
 
         def render_preview_page(self, index: int, max_width: int = 1400, max_height: int = 900):
-            # Ensure preview PDF exists
-            try:
-                _ = self.get_preview_url()
-            except Exception:
-                pass
-            path = globals().get('_PREVIEW_PDF')
+            path = _OCR_PDF or _SRC_PDF
             if not path:
-                raise RuntimeError('No preview PDF available')
+                raise RuntimeError('No source PDF available')
             try:
                 fitz = _import_fitz()
                 doc = fitz.open(path)
@@ -885,6 +1079,133 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             except Exception:
                 return False
 
+        def create_manual_text_box(self, page_index: int, x: Optional[float] = None, y: Optional[float] = None) -> Dict[str, Any]:
+            _log("create_manual_text_box:request", {"page_index": page_index, "x": x, "y": y, "manual": _MANUAL_MODE})
+            pdf_path = _OCR_PDF or _SRC_PDF
+            if pdf_path is None:
+                raise RuntimeError("No PDF available for manual annotations.")
+            if not _is_manual_mode():
+                _log("create_manual_text_box:manual_inactive", {})
+                raise RuntimeError("Manual mode is not active.")
+            try:
+                page_index = int(page_index)
+            except Exception as exc:
+                raise RuntimeError(f"Invalid page index: {exc}")
+            _ensure_page_sizes(pdf_path)
+            if page_index < 0:
+                page_index = 0
+            sizes = globals().get('_PAGE_SIZES') or {}
+            if not sizes:
+                raise RuntimeError("Page sizes unavailable.")
+            if page_index not in sizes:
+                # Clamp to last page if out of bounds
+                page_index = max(0, max(sizes.keys()))
+            page_w, page_h = sizes.get(page_index, next(iter(sizes.values())))
+            settings = _resolved_settings()
+            note_width = float(settings.get("note_width", DEFAULTS.get("note_width", 240)))
+            min_width = float(settings.get("min_note_width", DEFAULTS.get("min_note_width", 48)))
+            note_width = max(note_width, min_width)
+            base_height = float(settings.get("note_fontsize", DEFAULTS.get("note_fontsize", 9.0))) * 6.0
+            note_height = max(72.0, base_height)
+            margin = 36.0
+
+            placements = globals().get('_PLACEMENTS')
+            if placements is None:
+                placements = []
+                globals()['_PLACEMENTS'] = placements
+
+            fx = None
+            fy = None
+            if x is not None and y is not None:
+                try:
+                    fx = float(x)
+                    fy = float(y)
+                except Exception:
+                    fx = fy = None
+
+            if fx is not None and fy is not None and page_w > 0 and page_h > 0:
+                x0 = fx - 0.5 * note_width
+                y0 = fy - 0.5 * note_height
+                max_x = page_w - margin - note_width
+                max_y = page_h - margin - note_height
+                x0 = max(margin, min(x0, max_x if max_x >= margin else margin))
+                y0 = max(margin, min(y0, max_y if max_y >= margin else margin))
+                x1 = x0 + note_width
+                y1 = y0 + note_height
+            else:
+                same_page = []
+                for pl in placements:
+                    pg_val = None
+                    try:
+                        pg_val = getattr(pl, 'page_index', None)
+                    except Exception:
+                        pg_val = None
+                    if pg_val is None:
+                        try:
+                            if isinstance(pl, dict):
+                                pg_val = pl.get('page_index')
+                        except Exception:
+                            pg_val = None
+                    try:
+                        if pg_val is not None and int(pg_val) == page_index:
+                            same_page.append(pl)
+                    except Exception:
+                        continue
+                x0 = max(margin, page_w - note_width - margin)
+                y0 = margin + len(same_page) * (note_height + 18.0)
+                if y0 + note_height + margin > page_h:
+                    y0 = max(margin, page_h - note_height - margin)
+                x1 = min(page_w - margin, x0 + note_width)
+                y1 = min(page_h - margin, y0 + note_height)
+                x0 = x1 - note_width
+                y0 = y1 - note_height
+
+            uid = _next_manual_uid()
+            placement = {
+                'uid': uid,
+                'page_index': page_index,
+                'query': f'manual_{uid}',
+                'explanation': '',
+                'anchor_rect': None,
+                'note_rect': (x0, y0, x1, y1),
+            }
+            placements.append(placement)
+            _FIXED_OVERRIDES[uid] = (x0, y0, x1, y1)
+            _NOTE_TEXT_OVERRIDES.pop(uid, None)
+            _NOTE_COLOR_OVERRIDES.pop(uid, None)
+            _NOTE_FONTSIZE_OVERRIDES.pop(uid, None)
+            _ROTATION_OVERRIDES.pop(uid, None)
+            globals()['_PLACEMENTS'] = placements
+            globals()['_PREVIEW_PDF'] = None
+            _log("create_manual_text_box", {"uid": uid, "page": page_index, "rect": (x0, y0, x1, y1)})
+            return {
+                'uid': uid,
+                'page_index': page_index,
+                'note_rect': (x0, y0, x1, y1),
+            }
+
+        def debug_add_manual_note(self) -> Dict[str, Any]:
+            pdf_path = _OCR_PDF or _SRC_PDF
+            if not pdf_path:
+                return {'ok': False, 'error': 'no_pdf'}
+            if not _is_manual_mode():
+                _reset_annotation_state(manual=True)
+                _log('debug_add_manual_note', {'action': 'forced_manual_mode'})
+            try:
+                _ensure_page_sizes(pdf_path)
+            except Exception as exc:
+                return {'ok': False, 'error': f'page_sizes_failed:{type(exc).__name__}'}
+            sizes = globals().get('_PAGE_SIZES') or {}
+            if not sizes:
+                return {'ok': False, 'error': 'no_pages'}
+            first_page_index = sorted(sizes.keys())[0]
+            page_w, page_h = sizes[first_page_index]
+            try:
+                note = self.create_manual_text_box(first_page_index, page_w / 2.0, page_h / 2.0)
+                return {'ok': True, 'note': note}
+            except Exception as exc:
+                return {'ok': False, 'error': f'create_failed:{type(exc).__name__}:{exc}'}
+
         def browse_font_file(self, current: str | None = None) -> str:
             w = _wnd()
             try:
@@ -937,7 +1258,8 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
         def export_pdf(self, target_path: str) -> bool:
             pdf_path = _OCR_PDF or _SRC_PDF
             ann = _ANN_JSON
-            if not pdf_path or not ann or not target_path:
+            manual = _is_manual_mode()
+            if not pdf_path or not target_path or (not ann and not manual):
                 return False
             settings = _resolved_settings()
             try:
@@ -960,6 +1282,17 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                                 rect_obj = fitz.Rect(*rect_val)
                             else:
                                 rect_obj = fitz.Rect(float(rect_val.x0), float(rect_val.y0), float(rect_val.x1), float(rect_val.y1))
+                            anchor_val = getattr(pl, 'anchor_rect', None)
+                            if anchor_val is None:
+                                anchor_val = pl.get('anchor_rect')  # type: ignore[attr-defined]
+                            anchor_rect = None
+                            try:
+                                if isinstance(anchor_val, (list, tuple)) and len(anchor_val) == 4:
+                                    anchor_rect = tuple(float(x) for x in anchor_val)
+                                elif anchor_val is not None:
+                                    anchor_rect = (float(anchor_val.x0), float(anchor_val.y0), float(anchor_val.x1), float(anchor_val.y1))
+                            except Exception:
+                                anchor_rect = None
                             q = getattr(pl, 'query', None)
                             if q is None:
                                 q = pl.get('query')  # type: ignore[attr-defined]
@@ -974,18 +1307,23 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                                 pass
                             P = type('P', (), {})
                             p = P()
-                            p.uid = uid; p.page_index = pg; p.query = q; p.explanation = exp; p.note_rect = rect_obj
+                            p.uid = uid; p.page_index = pg; p.query = q; p.explanation = exp; p.note_rect = rect_obj; p.anchor_rect = anchor_rect
                             frz.append(p)
                         except Exception:
                             continue
                 except Exception:
                     frz = []
 
+                queries = []
+                comments = {}
+                if manual:
+                    queries, comments = _manual_queries_payload()
+
                 highlight_and_margin_comment_pdf(
                     pdf_path=pdf_path,
-                    queries=[],
-                    comments={},
-                    annotations_json=ann,
+                    queries=queries,
+                    comments=comments,
+                    annotations_json=ann if not manual else None,
                     out_path=target_path,
                     note_width=int(settings.get("note_width", 240)),
                     min_note_width=int(settings.get("min_note_width", 48)),

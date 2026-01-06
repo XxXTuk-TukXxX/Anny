@@ -5,21 +5,187 @@ from typing import Optional
 import sys
 import subprocess
 
+_DEFAULT_TESSERACT_PATHS = (
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/opt/local/bin",
+    "/usr/bin",
+)
+_DEFAULT_GHOSTSCRIPT_PATHS = _DEFAULT_TESSERACT_PATHS
+
+
+def _discover_bundled_tesseract() -> Optional[Path]:
+    """Return path to bundled tesseract directory if present."""
+
+    candidates: list[Path] = []
+    exe = None
+    try:
+        exe = Path(sys.executable).resolve()
+    except Exception:
+        exe = None
+
+    if getattr(sys, "frozen", False):
+        if exe is not None:
+            mac_resources = exe.parent.parent / "Resources" / "tesseract"
+            candidates.append(mac_resources)
+            candidates.append(exe.parent / "tesseract")
+            candidates.append(exe.parent / "_internal" / "tesseract")
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "tesseract")
+
+    here = Path(__file__).resolve().parent
+    candidates.append(here.parent / "third_party" / "tesseract-macos")
+
+    for base in candidates:
+        try:
+            bin_path = base / "bin" / "tesseract"
+            if bin_path.exists():
+                return base
+        except Exception:
+            continue
+    return None
+
+
+def _discover_bundled_ghostscript() -> Optional[Path]:
+    """Return path to bundled ghostscript directory if present."""
+
+    candidates: list[Path] = []
+    exe = None
+    try:
+        exe = Path(sys.executable).resolve()
+    except Exception:
+        exe = None
+
+    if getattr(sys, "frozen", False):
+        if exe is not None:
+            mac_resources = exe.parent.parent / "Resources" / "ghostscript"
+            candidates.append(mac_resources)
+            candidates.append(exe.parent / "ghostscript")
+            candidates.append(exe.parent / "_internal" / "ghostscript")
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "ghostscript")
+
+    here = Path(__file__).resolve().parent
+    candidates.append(here.parent / "third_party" / "ghostscript-macos")
+
+    for base in candidates:
+        try:
+            bin_path = base / "bin" / "gs"
+            if bin_path.exists():
+                return base
+        except Exception:
+            continue
+    return None
+
 import ocrmypdf
 
 # from modern_main import DEBUG
 
 def ensure_tesseract_available(custom_tesseract_path: str | None = None) -> None:
+    bundle_root = _discover_bundled_tesseract()
+
     if custom_tesseract_path:
         p = Path(custom_tesseract_path)
         if not p.exists():
             raise FileNotFoundError(f"Tesseract not found at: {custom_tesseract_path}")
         os.environ["PATH"] = str(p.parent) + os.pathsep + os.environ.get("PATH", "")
+    elif bundle_root is not None:
+        bin_dir = bundle_root / "bin"
+        lib_dir = bundle_root / "lib"
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+        share_dir = bundle_root / "share"
+        tessdata_dir = share_dir / "tessdata"
+        # Point Tesseract to the bundled language data; default to the share dir if tessdata missing.
+        os.environ["TESSDATA_PREFIX"] = str(tessdata_dir if tessdata_dir.exists() else share_dir)
+        dyld = os.environ.get("DYLD_LIBRARY_PATH", "")
+        os.environ["DYLD_LIBRARY_PATH"] = str(lib_dir) + os.pathsep + dyld if dyld else str(lib_dir)
+    else:
+        # When launched as a macOS .app, PATH is short; add common Homebrew locations.
+        path_entries = os.environ.get("PATH", "").split(os.pathsep)
+        missing = [p for p in _DEFAULT_TESSERACT_PATHS if p and p not in path_entries and Path(p).exists()]
+        if missing:
+            os.environ["PATH"] = os.pathsep.join(missing + path_entries)
     if shutil.which("tesseract") is None:
         raise RuntimeError(
             "Tesseract is not available on PATH.\n\n"
             "Install Tesseract (e.g., UB Mannheim build on Windows) or pick its path "
             "in the 'Tesseract path' field."
+        )
+
+
+def _set_ghostscript_env(bundle_root: Optional[Path]) -> None:
+    if bundle_root is None:
+        return
+    bin_dir = bundle_root / "bin"
+    lib_dir = bundle_root / "lib"
+    current_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{current_path}" if current_path else str(bin_dir)
+    dyld = os.environ.get("DYLD_LIBRARY_PATH", "")
+    os.environ["DYLD_LIBRARY_PATH"] = f"{lib_dir}{os.pathsep}{dyld}" if dyld else str(lib_dir)
+
+    share_root = bundle_root / "share" / "ghostscript"
+    lib_paths: list[str] = []
+    resource_dir: Optional[Path] = None
+    if share_root.exists():
+        versioned = sorted(
+            (p for p in share_root.iterdir() if p.is_dir() and p.name[:1].isdigit()),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        target = versioned[0] if versioned else None
+        if target:
+            lib_candidate = target / "lib"
+            resource_dir = target / "Resource"
+            fonts_dir = target / "fonts"
+            for path in (lib_candidate, resource_dir, resource_dir / "Init" if resource_dir else None, fonts_dir):
+                if path and path.exists():
+                    lib_paths.append(str(path))
+        else:
+            for fallback in ("lib", "Resource", "fonts"):
+                candidate = share_root / fallback
+                if candidate.exists():
+                    lib_paths.append(str(candidate))
+                    if fallback == "Resource":
+                        resource_dir = candidate
+    existing = os.environ.get("GS_LIB")
+    if lib_paths:
+        combined = os.pathsep.join(lib_paths + ([existing] if existing else []))
+        os.environ["GS_LIB"] = combined
+    if resource_dir and resource_dir.exists():
+        resource_str = str(resource_dir)
+        if not resource_str.endswith(os.sep):
+            resource_str = resource_str + os.sep
+        font_dir = resource_dir / "Font"
+        font_str = str(font_dir)
+        if not font_str.endswith(os.sep):
+            font_str = font_str + os.sep
+        os.environ.setdefault("GS_GEN_RESOURCE_DIR", resource_str)
+        os.environ.setdefault("GS_RESOURCE_DIR", resource_str)
+        os.environ.setdefault("GS_FONT_RESOURCE_DIR", font_str)
+        gs_opts = os.environ.get("GS_OPTIONS", "")
+        extra_opts = [
+            f"-sGenericResourceDir={resource_str}",
+            f"-sFontResourceDir={font_str}",
+        ]
+        opts = " ".join(extra_opts)
+        os.environ["GS_OPTIONS"] = f"{gs_opts} {opts}".strip() if gs_opts else opts
+
+
+def ensure_ghostscript_available() -> None:
+    bundle_root = _discover_bundled_ghostscript()
+    if bundle_root is not None:
+        _set_ghostscript_env(bundle_root)
+    else:
+        path_entries = os.environ.get("PATH", "").split(os.pathsep)
+        missing = [p for p in _DEFAULT_GHOSTSCRIPT_PATHS if p and p not in path_entries and Path(p).exists()]
+        if missing:
+            os.environ["PATH"] = os.pathsep.join(missing + path_entries)
+    if shutil.which("gs") is None:
+        raise RuntimeError(
+            "Ghostscript ('gs') is not available on PATH.\n\n"
+            "Install Ghostscript (brew install ghostscript) or bundle it under third_party/ghostscript-macos."
         )
 
 
@@ -42,6 +208,7 @@ def run_ocr(
     custom_tesseract_path: str | None = None,
 ) -> str:
     ensure_tesseract_available(custom_tesseract_path)
+    ensure_ghostscript_available()
     out_path = output_pdf or str(Path(input_pdf).with_suffix(".ocr.pdf"))
 
     # Temporarily hide child consoles on Windows while running OCR pipeline.
@@ -124,6 +291,7 @@ def run_ocr(
         optimize=optimize,
         deskew=deskew,
         remove_background=clean,
+        color_conversion_strategy="RGB",
         # Silence rich progress output in terminal
         progress_bar=False,
         )
