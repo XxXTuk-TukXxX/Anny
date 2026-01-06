@@ -1,0 +1,8 @@
+[phases.setup]
+# System dependencies required by OCRmyPDF at runtime.
+# (Install the Python deps via requirements.txt as usual.)
+nixPkgs = ["tesseract", "ghostscript"]
+
+[start]
+cmd = "gunicorn flask_app:app --bind 0.0.0.0:$PORT"
+
