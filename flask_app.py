@@ -44,6 +44,15 @@ def _save_upload(file_obj, fallback_name: str) -> Path:
     return dest
 
 
+def _missing_ocr_deps() -> list[str]:
+    missing: list[str] = []
+    if shutil.which("tesseract") is None:
+        missing.append("tesseract")
+    if shutil.which("gs") is None:
+        missing.append("ghostscript (gs)")
+    return missing
+
+
 def _build_preview_data_url() -> str:
     pdf_path = state._OCR_PDF or state._SRC_PDF
     ann = state._ANN_JSON
@@ -228,6 +237,16 @@ def api_upload_pdf():
     state._reset_annotation_state(manual=False)
 
     try:
+        missing = _missing_ocr_deps()
+        if missing:
+            msg = (
+                "OCR dependencies are missing on the server: "
+                + ", ".join(missing)
+                + ".\n\n"
+                + "If deploying to Railway, install system packages (e.g. via nixpacks) and redeploy."
+            )
+            state._log("api:ocr_missing_deps", missing)
+            return jsonify({"ok": False, "error": msg}), 500
         outp = run_ocr(
             input_pdf=str(pdf_path),
             output_pdf=None,
@@ -241,6 +260,10 @@ def api_upload_pdf():
         state._OCR_PDF = outp
         state._log("api:ocr_complete", outp)
     except Exception as exc:
+        try:
+            app.logger.exception("OCR failed")
+        except Exception:
+            pass
         state._log("api:ocr_failed", type(exc).__name__, str(exc))
         return jsonify({"ok": False, "error": f"OCR failed: {type(exc).__name__}: {exc}"}), 500
 

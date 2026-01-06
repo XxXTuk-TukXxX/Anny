@@ -57,6 +57,7 @@ Python packages are listed in `requirements.txt`.
 - This repo includes a `Procfile` that starts the Flask app with Gunicorn:
   - `web: gunicorn flask_app:app --bind 0.0.0.0:${PORT:-5000}`
 - If you previously set Railway’s Start Command to `python main.py`, change it to `gunicorn flask_app:app --bind 0.0.0.0:$PORT`.
+- OCR requires system dependencies (Tesseract + Ghostscript). For Railway (nixpacks), this repo includes `nixpacks.toml` which installs them; redeploy after adding it.
 
 ### Building a standalone app (optional)
 - Install PyInstaller: `pip install pyinstaller`
