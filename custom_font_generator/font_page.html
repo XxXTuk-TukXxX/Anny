@@ -37,7 +37,7 @@
 <span class="material-symbols-outlined text-base">note_stack</span>
 Annotations
 </a>
-<a href="font_page.html" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white bg-primary shadow-sm transition-colors hover:bg-primary/90">
+<a href="/custom_font_generator/font_page.html" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white bg-primary shadow-sm transition-colors hover:bg-primary/90">
 <span class="material-symbols-outlined text-base">edit_square</span>
 Font maker
 </a>
@@ -58,7 +58,7 @@ Font maker
 <div class="flex w-full min-w-72 grow flex-col items-start justify-center gap-2 py-6 px-4 @xl:px-8">
 <p class="text-[#111418] dark:text-white text-lg font-bold leading-tight tracking-[-0.015em]">Step 1 – Download the template</p>
 <p class="text-[#617589] dark:text-white/70 text-base font-normal leading-normal mb-4">A brief explanation of why the template is needed and instructions to fill it out clearly.</p>
-<a href="{{ url_for('template_pdf') }}" class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-primary text-white text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
+<a href="/custom_font_generator/static/handwrite_template.pdf" download class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-primary text-white text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
 <span class="truncate">Download Template (.pdf)</span>
 </a>
 </div>
@@ -66,7 +66,7 @@ Font maker
 </div>
 <!-- Step 2 Empty State / Uploader -->
 <div class="p-4">
-<form action="{{ url_for('upload_scan') }}" method="post" enctype="multipart/form-data" class="flex flex-col items-center gap-6 rounded-xl border-2 border-dashed border-[#dbe0e6] dark:border-white/20 px-6 py-14">
+<form action="/custom_font_generator/upload" method="post" enctype="multipart/form-data" class="flex flex-col items-center gap-6 rounded-xl border-2 border-dashed border-[#dbe0e6] dark:border-white/20 px-6 py-14">
 <div class="flex max-w-[480px] flex-col items-center gap-2">
 <p class="text-[#111418] dark:text-white text-lg font-bold leading-tight tracking-[-0.015em] max-w-[480px] text-center">Step 2 – Upload your filled sheet</p>
 <p class="text-[#617589] dark:text-white/70 text-sm font-normal leading-normal max-w-[480px] text-center">
@@ -79,7 +79,7 @@ Font maker
 </label>
 <p id="file-name" class="text-sm text-[#617589] dark:text-white/70">No file selected yet</p>
 <button type="submit" class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-primary text-white text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
-<span class="truncate">Generate Font (.ttf)</span>
+<span class="truncate">Generate &amp; Preview</span>
 </button>
 </form>
 </div>

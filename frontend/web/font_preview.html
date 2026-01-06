@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Font Preview</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet" />
+    <style>
+      .preview-font {
+        font-family: "AnnyPreviewFont", system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+    </style>
+  </head>
+
+  <body class="bg-gray-50 text-gray-900" style="font-family: Inter, sans-serif">
+    <div class="mx-auto w-full max-w-3xl px-4 py-10">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h1 class="text-3xl font-black tracking-tight">Font preview</h1>
+          <p class="mt-2 text-sm text-gray-600">Edit the text below to preview your generated font.</p>
+        </div>
+        <a href="/custom_font_generator/font_page.html" class="mt-1 text-sm font-semibold text-blue-700 hover:underline">Generate another</a>
+      </div>
+
+      <div id="missingToken" class="mt-6 hidden rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+        Missing preview token. Go back and generate a font again.
+      </div>
+
+      <div class="mt-6 flex flex-col gap-4">
+        <div>
+          <label for="txt" class="block text-sm font-semibold text-gray-800">Preview text</label>
+          <textarea id="txt" rows="5" class="mt-2 w-full rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+The quick brown fox jumps over the lazy dog.
+ABCDEFGHIJKLMNOPQRSTUVWXYZ
+abcdefghijklmnopqrstuvwxyz
+0123456789</textarea
+          >
+        </div>
+
+        <div class="flex items-center gap-4">
+          <label for="size" class="text-sm font-semibold text-gray-800">Size</label>
+          <input id="size" type="range" min="12" max="96" value="48" class="w-full" />
+          <div id="sizeVal" class="w-12 text-right text-sm text-gray-600">48px</div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div class="flex items-center gap-4">
+            <label for="letter" class="w-28 text-sm font-semibold text-gray-800">Letter</label>
+            <input id="letter" type="range" min="-2" max="20" step="0.5" value="0" class="w-full" />
+            <div id="letterVal" class="w-12 text-right text-sm text-gray-600">0px</div>
+          </div>
+          <div class="flex items-center gap-4">
+            <label for="word" class="w-28 text-sm font-semibold text-gray-800">Word</label>
+            <input id="word" type="range" min="0" max="40" step="1" value="0" class="w-full" />
+            <div id="wordVal" class="w-12 text-right text-sm text-gray-600">0px</div>
+          </div>
+          <div class="flex items-center gap-4">
+            <label for="line" class="w-28 text-sm font-semibold text-gray-800">Line</label>
+            <input id="line" type="range" min="0.8" max="2.5" step="0.05" value="1.2" class="w-full" />
+            <div id="lineVal" class="w-12 text-right text-sm text-gray-600">1.20</div>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <div id="preview" class="preview-font whitespace-pre-wrap leading-tight"></div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <a
+            id="downloadBtn"
+            href="#"
+            class="inline-flex h-10 items-center justify-center rounded-full bg-blue-600 px-6 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
+            >Download .ttf</a
+          >
+          <button
+            id="resetBtn"
+            type="button"
+            class="inline-flex h-10 items-center justify-center rounded-full border border-gray-200 bg-white px-6 text-sm font-bold text-gray-900 shadow-sm hover:bg-gray-50"
+          >
+            Reset
+          </button>
+          <div id="fileName" class="text-xs text-gray-500"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const txt = document.getElementById("txt");
+      const preview = document.getElementById("preview");
+      const size = document.getElementById("size");
+      const sizeVal = document.getElementById("sizeVal");
+      const letter = document.getElementById("letter");
+      const letterVal = document.getElementById("letterVal");
+      const word = document.getElementById("word");
+      const wordVal = document.getElementById("wordVal");
+      const line = document.getElementById("line");
+      const lineVal = document.getElementById("lineVal");
+      const missingToken = document.getElementById("missingToken");
+      const downloadBtn = document.getElementById("downloadBtn");
+      const fileName = document.getElementById("fileName");
+      const resetBtn = document.getElementById("resetBtn");
+
+      const DEFAULTS = {
+        size: 48,
+        letter: 0,
+        word: 0,
+        line: 1.2,
+      };
+
+      function getToken() {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const token = (params.get("token") || "").trim();
+          return token ? token : null;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function sync() {
+        preview.textContent = txt.value;
+        const px = parseInt(size.value || "48", 10);
+        preview.style.fontSize = px + "px";
+        sizeVal.textContent = px + "px";
+
+        const letterPx = parseFloat(letter.value || "0");
+        preview.style.letterSpacing = letterPx + "px";
+        letterVal.textContent = (Math.round(letterPx * 100) / 100).toString() + "px";
+
+        const wordPx = parseFloat(word.value || "0");
+        preview.style.wordSpacing = wordPx + "px";
+        wordVal.textContent = (Math.round(wordPx * 100) / 100).toString() + "px";
+
+        const lineValNum = parseFloat(line.value || "1.2");
+        preview.style.lineHeight = lineValNum.toString();
+        lineVal.textContent = lineValNum.toFixed(2);
+      }
+
+      txt.addEventListener("input", sync);
+      size.addEventListener("input", sync);
+      letter.addEventListener("input", sync);
+      word.addEventListener("input", sync);
+      line.addEventListener("input", sync);
+
+      resetBtn.addEventListener("click", () => {
+        size.value = DEFAULTS.size.toString();
+        letter.value = DEFAULTS.letter.toString();
+        word.value = DEFAULTS.word.toString();
+        line.value = DEFAULTS.line.toString();
+        sync();
+      });
+
+      const token = getToken();
+      if (!token) {
+        missingToken.classList.remove("hidden");
+        downloadBtn.setAttribute("aria-disabled", "true");
+        downloadBtn.classList.add("pointer-events-none", "opacity-50");
+        sync();
+      } else {
+        const safe = encodeURIComponent(token);
+        const style = document.createElement("style");
+        style.textContent = `@font-face { font-family: "AnnyPreviewFont"; src: url("/custom_font_generator/font/${safe}.ttf") format("truetype"); font-weight: 400; font-style: normal; }`;
+        document.head.appendChild(style);
+
+        downloadBtn.href = `/custom_font_generator/download/${safe}`;
+
+        fetch(`/custom_font_generator/meta/${safe}`)
+          .then((r) => r.json())
+          .then((j) => {
+            if (j && j.ok && j.name) {
+              fileName.textContent = `File: ${j.name}`;
+            }
+          })
+          .catch(() => {});
+
+        sync();
+      }
+    </script>
+  </body>
+</html>

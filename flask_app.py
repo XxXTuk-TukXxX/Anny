@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import base64
 import os
+import shutil
+import subprocess
 import tempfile
+import time
+import uuid
 from pathlib import Path
 
-from flask import Flask, after_this_request, jsonify, request, send_from_directory, send_file
+from flask import Flask, after_this_request, jsonify, redirect, request, send_from_directory, send_file
 from werkzeug.utils import secure_filename
 
 import main as state
@@ -19,8 +23,12 @@ from models.gemini_annotaton import annotate_txt_file
 WEB_ROOT = Path(__file__).resolve().parent / "frontend" / "web"
 CUSTOM_FONT_ROOT = Path(__file__).resolve().parent / "custom_font_generator"
 FONTS_ROOT = Path(__file__).resolve().parent / "fonts"
+FONT_MAKER_CACHE_DIR = Path(tempfile.gettempdir()) / "anny_font_maker"
+FONT_MAKER_CACHE_MAX_AGE_SECONDS = 60 * 60  # 1 hour
 
 app = Flask(__name__, static_folder=str(WEB_ROOT), static_url_path="")
+
+_FONT_MAKER_INDEX: dict[str, dict[str, object]] = {}
 
 
 def _none_if_empty(val):
@@ -880,12 +888,209 @@ def serve_legacy_web_path(filename: str):
     return ("Not Found", 404)
 
 
+def _font_maker_cache_root() -> Path:
+    try:
+        FONT_MAKER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return FONT_MAKER_CACHE_DIR
+
+
+def _purge_font_maker_cache(max_age_seconds: int = FONT_MAKER_CACHE_MAX_AGE_SECONDS) -> None:
+    now = time.time()
+    cache_root = _font_maker_cache_root()
+
+    for token, meta in list(_FONT_MAKER_INDEX.items()):
+        created = float(meta.get("created") or 0)
+        p = Path(str(meta.get("path") or ""))
+        if (now - created) > max_age_seconds or not p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+            _FONT_MAKER_INDEX.pop(token, None)
+
+    try:
+        for p in cache_root.glob("*.ttf"):
+            try:
+                if (now - p.stat().st_mtime) > max_age_seconds:
+                    p.unlink()
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
+@app.get("/custom_font_generator/font/<token>.ttf")
+def font_maker_font_file(token: str):
+    _purge_font_maker_cache()
+    meta = _FONT_MAKER_INDEX.get(str(token))
+    if not meta:
+        p = _font_maker_cache_root() / f"{token}.ttf"
+        if not p.exists():
+            return ("Not Found", 404)
+        meta = {"path": str(p), "name": p.name, "created": 0.0}
+
+    p = Path(str(meta.get("path") or ""))
+    if not p.exists():
+        return ("Not Found", 404)
+    resp = send_file(str(p), mimetype="font/ttf")
+    try:
+        resp.headers["Cache-Control"] = "no-store"
+    except Exception:
+        pass
+    return resp
+
+
+@app.get("/custom_font_generator/download/<token>")
+def font_maker_download(token: str):
+    _purge_font_maker_cache()
+    meta = _FONT_MAKER_INDEX.get(str(token))
+    if not meta:
+        p = _font_maker_cache_root() / f"{token}.ttf"
+        if not p.exists():
+            return ("Not Found", 404)
+        meta = {"path": str(p), "name": p.name, "created": 0.0}
+
+    p = Path(str(meta.get("path") or ""))
+    if not p.exists():
+        return ("Not Found", 404)
+    name = str(meta.get("name") or p.name or "handwriting.ttf")
+    return send_file(str(p), mimetype="font/ttf", as_attachment=True, download_name=name)
+
+
+@app.get("/custom_font_generator/meta/<token>")
+def font_maker_meta(token: str):
+    _purge_font_maker_cache()
+    meta = _FONT_MAKER_INDEX.get(str(token))
+    if not meta:
+        p = _font_maker_cache_root() / f"{token}.ttf"
+        if not p.exists():
+            return jsonify({"ok": False, "error": "Not Found"}), 404
+        return jsonify({"ok": True, "token": str(token), "name": p.name})
+
+    p = Path(str(meta.get("path") or ""))
+    if not p.exists():
+        return jsonify({"ok": False, "error": "Not Found"}), 404
+    name = str(meta.get("name") or p.name or "handwriting.ttf")
+    return jsonify({"ok": True, "token": str(token), "name": name})
+
+
+@app.get("/custom_font_generator/preview/<token>")
+def font_maker_preview(token: str):
+    _purge_font_maker_cache()
+    meta = _FONT_MAKER_INDEX.get(str(token))
+    if not meta:
+        p = _font_maker_cache_root() / f"{token}.ttf"
+        if not p.exists():
+            return ("Not Found", 404)
+        meta = {"path": str(p), "name": p.name, "created": 0.0}
+
+    p = Path(str(meta.get("path") or ""))
+    if not p.exists():
+        return ("Not Found", 404)
+    return redirect(f"/font_preview.html?token={token}")
+
+
 @app.route("/custom_font_generator/<path:filename>")
 def serve_font_generator(filename: str):
     target = CUSTOM_FONT_ROOT / filename
     if target.exists():
         return send_from_directory(CUSTOM_FONT_ROOT, filename)
     return ("Not Found", 404)
+
+
+@app.post("/custom_font_generator/upload")
+def font_maker_upload():
+    file_obj = request.files.get("scan")
+    if file_obj is None or not (file_obj.filename or "").strip():
+        return ("No file uploaded", 400)
+
+    _purge_font_maker_cache()
+
+    scan_path = _save_upload(file_obj, "handwrite_scan")
+    input_path = scan_path
+    try:
+        ext = (scan_path.suffix or "").lower()
+        if ext == ".pdf" or (file_obj.mimetype or "").lower() == "application/pdf":
+            fitz = _import_fitz()
+            doc = fitz.open(str(scan_path))
+            try:
+                if getattr(doc, "page_count", 0) < 1:
+                    return ("Uploaded PDF has no pages.", 400)
+                pg = doc.load_page(0)
+                scale = 4.0  # ~288 DPI for 72pt PDF units
+                mat = fitz.Matrix(scale, scale)
+                pix = pg.get_pixmap(matrix=mat, alpha=False)
+                png_path = scan_path.with_suffix(".png")
+                pix.save(str(png_path))
+                input_path = png_path
+            finally:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
+    except Exception as exc:
+        return (f"Failed to prepare uploaded file: {type(exc).__name__}: {exc}", 400)
+
+    out_dir = Path(tempfile.mkdtemp(prefix="anny_font_out_"))
+    font_basename = secure_filename(Path(file_obj.filename).stem or scan_path.stem or "handwriting") or "handwriting"
+    out_ttf = out_dir / f"{font_basename}.ttf"
+
+    @after_this_request
+    def _cleanup(resp):
+        try:
+            shutil.rmtree(scan_path.parent, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(out_dir, ignore_errors=True)
+        except Exception:
+            pass
+        return resp
+
+    cmd = [
+        "handwrite",
+        str(input_path),
+        str(out_dir),
+        "--filename",
+        font_basename,
+        "--family",
+        font_basename,
+        "--style",
+        "Regular",
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError:
+        return (
+            "Missing dependency: install the `handwrite` CLI (`pip install handwrite`) and FontForge, then restart Anny.",
+            500,
+        )
+    except subprocess.CalledProcessError as exc:
+        details = (exc.stderr or exc.stdout or "").strip()
+        msg = f"Font generation failed (exit {exc.returncode})."
+        if details:
+            msg += "\n\n" + details
+        return (msg, 500)
+
+    if not out_ttf.exists():
+        candidates = sorted(out_dir.glob("*.ttf"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not candidates:
+            return ("Font generation finished, but no .ttf output was produced.", 500)
+        out_ttf = candidates[0]
+
+    token = uuid.uuid4().hex
+    cache_root = _font_maker_cache_root()
+    stored_ttf = cache_root / f"{token}.ttf"
+    try:
+        shutil.copy2(out_ttf, stored_ttf)
+    except Exception as exc:
+        return (f"Failed to store generated font: {type(exc).__name__}: {exc}", 500)
+
+    _FONT_MAKER_INDEX[str(token)] = {"path": str(stored_ttf), "name": out_ttf.name, "created": time.time()}
+    return redirect(f"/custom_font_generator/preview/{token}")
 
 
 @app.route("/fonts/<path:filename>")
