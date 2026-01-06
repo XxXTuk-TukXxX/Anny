@@ -52,6 +52,12 @@ Python packages are listed in `requirements.txt`.
    - By default, the modern web UI opens. To force the legacy Tk UI, set `ANNOTATE_USE_MODERN=0` in your environment.
    - Or run as a local Flask web app: `PORT=5001 python flask_app.py` then open http://localhost:5001/ in your browser. (Flask mode is single-user and intended for local use only.)
 
+### Deploying to Railway (web)
+- Railway runs in a headless Linux container, so the desktop UI (`pywebview` / GTK / Qt) cannot start there.
+- This repo includes a `Procfile` that starts the Flask app with Gunicorn:
+  - `web: gunicorn flask_app:app --bind 0.0.0.0:${PORT:-5000}`
+- If you previously set Railway’s Start Command to `python main.py`, change it to `gunicorn flask_app:app --bind 0.0.0.0:$PORT`.
+
 ### Building a standalone app (optional)
 - Install PyInstaller: `pip install pyinstaller`
 - Use the provided spec (Windows UI app without console):

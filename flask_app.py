@@ -12,7 +12,7 @@ from pathlib import Path
 from flask import Flask, after_this_request, jsonify, redirect, request, send_from_directory, send_file
 from werkzeug.utils import secure_filename
 
-import main as state
+import local_app as state
 from frontend.backend import run_ocr
 from frontend.defaults import DEFAULTS
 from frontend.colors import build_color_map
@@ -1112,4 +1112,5 @@ def font_maker_index():
 if __name__ == "__main__":
     # Flask dev server for running the app as a web experience.
     port = int(os.environ.get("PORT", "5001"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    debug = str(os.environ.get("FLASK_DEBUG", "")).strip().lower() in ("1", "true", "yes")
+    app.run(host="0.0.0.0", port=port, debug=debug)

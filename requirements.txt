@@ -7,6 +7,7 @@ pywebview>=4.0.0
 
 # Web server
 Flask>=3.0.0
+gunicorn>=21.2.0
 
 # Font maker (requires FontForge installed separately)
 handwrite>=0.3.1
