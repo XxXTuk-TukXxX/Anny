@@ -8,6 +8,10 @@ pywebview>=4.0.0
 # Web server
 Flask>=3.0.0
 
+# Font maker (requires FontForge installed separately)
+handwrite>=0.3.1
+requests>=2.0.0
+
 # AI annotations (Gemini)
 google-genai>=0.3.0    # Google Generative AI SDK
 pydantic>=2.0.0        # Structured output schema for Gemini
