@@ -14,8 +14,6 @@ try:
     import webview  # PyWebView for modern HTML UI bridge
 except Exception:  # pragma: no cover - optional dependency
     webview = None  # type: ignore
-
-from UI import WizardApp
 from frontend.backend import run_ocr, _remove_background_supported
 from frontend.defaults import DEFAULTS
 from frontend.settings_store import get_effective_settings, save_user_settings, reset_user_settings
@@ -1504,6 +1502,8 @@ def main():
     if use_modern and webview is not None:
         _start_webview_flow()
         return
+    from UI import WizardApp  # local import avoids Tk dependency on servers
+
     app = WizardApp()
     app.mainloop()
 
