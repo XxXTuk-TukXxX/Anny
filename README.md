@@ -55,8 +55,8 @@ Python packages are listed in `requirements.txt`.
 ### Deploying to Railway (web)
 - Railway runs in a headless Linux container, so the desktop UI (`pywebview` / GTK / Qt) cannot start there.
 - This repo includes a `Procfile` that starts the Flask app with Gunicorn:
-  - `web: gunicorn flask_app:app --bind 0.0.0.0:${PORT:-5000}`
-- If you previously set Railway’s Start Command to `python main.py`, change it to `gunicorn flask_app:app --bind 0.0.0.0:$PORT`.
+  - `web: gunicorn -c gunicorn.conf.py flask_app:app`
+- If you previously set Railway’s Start Command to `python main.py`, change it to `gunicorn -c gunicorn.conf.py flask_app:app`.
 - OCR requires system dependencies (Tesseract + Ghostscript).
   - If you use Railway’s Nixpacks builder, this repo includes `nixpacks.toml`; redeploy after adding it.
   - If you use Railway’s Railpack builder (log shows “Railpack”), it ignores `nixpacks.toml`. Use the provided `Dockerfile` and switch the service to Dockerfile builder.
