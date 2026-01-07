@@ -61,6 +61,7 @@ Python packages are listed in `requirements.txt`.
   - If you use Railway’s Nixpacks builder, this repo includes `nixpacks.toml`; redeploy after adding it.
   - If you use Railway’s Railpack builder (log shows “Railpack”), it ignores `nixpacks.toml`. Use the provided `Dockerfile` and switch the service to Dockerfile builder.
 - Font Maker (Handwrite) needs OpenCV system libs on Linux. The `Dockerfile` installs `libgl1` so `cv2` can import in containers.
+- Font Maker also needs `potrace` (bitmap → vector) and `fontforge` to build the final `.ttf`. The `Dockerfile` installs both.
 
 ### Building a standalone app (optional)
 - Install PyInstaller: `pip install pyinstaller`

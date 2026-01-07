@@ -12,6 +12,7 @@ from pathlib import Path
 
 from flask import Flask, after_this_request, jsonify, redirect, request, send_from_directory, send_file
 from werkzeug.utils import secure_filename
+import requests
 
 import local_app as state
 from frontend.backend import run_ocr
@@ -33,6 +34,12 @@ _FONT_MAKER_INDEX: dict[str, dict[str, object]] = {}
 _JOBS_LOCK = threading.Lock()
 _JOBS: dict[str, dict[str, object]] = {}
 _JOB_MAX_AGE_SECONDS = 60 * 60  # 1 hour
+
+# Official template from the Handwrite repo (fallback if template PDF isn't shipped).
+_HANDWRITE_TEMPLATE_URL = (
+    "https://raw.githubusercontent.com/"
+    "yashlamba/handwrite/dev/handwrite_sample.pdf"
+)
 
 
 def _none_if_empty(val):
@@ -1128,6 +1135,22 @@ def font_maker_preview(token: str):
 @app.get("/custom_font_generator/static/handwrite_template.pdf")
 def font_maker_template_pdf():
     p = (CUSTOM_FONT_ROOT / "static" / "handwrite_template.pdf").resolve()
+    if not p.exists():
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            resp = requests.get(_HANDWRITE_TEMPLATE_URL, timeout=30)
+            resp.raise_for_status()
+            p.write_bytes(resp.content)
+        except Exception:
+            return (
+                "Template PDF is not available on the server.\n\n"
+                "If you are deploying from git, ensure `custom_font_generator/static/handwrite_template.pdf` "
+                "is committed (it may be ignored by `*.pdf` rules), or allow outbound network so the server can fetch it.",
+                404,
+            )
     if not p.exists():
         return ("Not Found", 404)
     return send_file(str(p), mimetype="application/pdf", as_attachment=True, download_name="handwrite_template.pdf")

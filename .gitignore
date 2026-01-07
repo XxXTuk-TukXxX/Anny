@@ -3,6 +3,7 @@ __pycache__/
 
 # PDF files
 *.pdf
+!custom_font_generator/static/handwrite_template.pdf
 
 # Environment file
 .env
