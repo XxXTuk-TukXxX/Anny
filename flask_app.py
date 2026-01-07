@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -29,6 +30,9 @@ FONT_MAKER_CACHE_MAX_AGE_SECONDS = 60 * 60  # 1 hour
 app = Flask(__name__, static_folder=str(WEB_ROOT), static_url_path="")
 
 _FONT_MAKER_INDEX: dict[str, dict[str, object]] = {}
+_JOBS_LOCK = threading.Lock()
+_JOBS: dict[str, dict[str, object]] = {}
+_JOB_MAX_AGE_SECONDS = 60 * 60  # 1 hour
 
 
 def _none_if_empty(val):
@@ -51,6 +55,54 @@ def _missing_ocr_deps() -> list[str]:
     if shutil.which("gs") is None:
         missing.append("ghostscript (gs)")
     return missing
+
+
+def _purge_jobs() -> None:
+    now = time.time()
+    with _JOBS_LOCK:
+        old = [jid for jid, j in _JOBS.items() if (now - float(j.get("created") or now)) > _JOB_MAX_AGE_SECONDS]
+        for jid in old:
+            _JOBS.pop(jid, None)
+
+
+def _job_create(kind: str) -> str:
+    _purge_jobs()
+    jid = uuid.uuid4().hex
+    with _JOBS_LOCK:
+        _JOBS[jid] = {
+            "id": jid,
+            "kind": kind,
+            "status": "queued",
+            "created": time.time(),
+            "updated": time.time(),
+            "next": "",
+            "error": "",
+        }
+    return jid
+
+
+def _job_update(job_id: str, **fields: object) -> None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return
+        job.update(fields)
+        job["updated"] = time.time()
+
+
+def _job_get(job_id: str) -> dict[str, object] | None:
+    _purge_jobs()
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+@app.get("/api/job/<job_id>")
+def api_job_status(job_id: str):
+    job = _job_get(str(job_id))
+    if not job:
+        return jsonify({"ok": False, "error": "Not Found"}), 404
+    return jsonify({"ok": True, **job})
 
 
 def _build_preview_data_url() -> str:
@@ -236,6 +288,8 @@ def api_upload_pdf():
     state._ANN_JSON = None
     state._reset_annotation_state(manual=False)
 
+    async_mode = str(request.args.get("async", "")).strip().lower() in ("1", "true", "yes")
+
     try:
         missing = _missing_ocr_deps()
         if missing:
@@ -247,6 +301,37 @@ def api_upload_pdf():
             )
             state._log("api:ocr_missing_deps", missing)
             return jsonify({"ok": False, "error": msg}), 500
+
+        if async_mode:
+            job_id = _job_create("ocr")
+            _job_update(job_id, status="running")
+
+            def _run():
+                try:
+                    outp = run_ocr(
+                        input_pdf=str(pdf_path),
+                        output_pdf=None,
+                        languages="eng",
+                        force=False,
+                        optimize=0,
+                        deskew=True,
+                        clean=False,
+                        custom_tesseract_path=None,
+                    )
+                    state._OCR_PDF = outp
+                    state._log("api:ocr_complete", outp)
+                    _job_update(job_id, status="done", next="/get_started.html")
+                except Exception as exc:
+                    try:
+                        app.logger.exception("OCR failed")
+                    except Exception:
+                        pass
+                    state._log("api:ocr_failed", type(exc).__name__, str(exc))
+                    _job_update(job_id, status="error", error=f"OCR failed: {type(exc).__name__}: {exc}")
+
+            threading.Thread(target=_run, daemon=True).start()
+            return jsonify({"ok": True, "job": job_id, "next": f"/loading_ocr.html?job={job_id}"})
+
         outp = run_ocr(
             input_pdf=str(pdf_path),
             output_pdf=None,
@@ -797,6 +882,7 @@ def api_start_gemini():
     prompt = (payload.get("prompt") or "").strip()
     model = (payload.get("model") or "gemini-2.5-flash").strip()
     max_items = int(payload.get("max_items") or 12)
+    async_mode = str(request.args.get("async", "")).strip().lower() in ("1", "true", "yes")
 
     pdf_path = state._OCR_PDF or state._SRC_PDF
     if not pdf_path:
@@ -825,6 +911,30 @@ def api_start_gemini():
         return jsonify({"ok": False, "error": "Failed to extract text from PDF for Gemini."}), 500
 
     out_json = str(Path(pdf_path).with_suffix("")) + "__annotations.json"
+
+    if async_mode:
+        job_id = _job_create("gemini")
+        _job_update(job_id, status="running")
+
+        def _run():
+            try:
+                annotate_txt_file(
+                    txt_path=txt_path,
+                    objective=prompt,
+                    outfile=out_json,
+                    model=model or "gemini-2.5-flash",
+                    max_items_hint=max_items,
+                )
+                state._ANN_JSON = out_json
+                state._reset_annotation_state(manual=False)
+                _job_update(job_id, status="done", next="/preview.html")
+            except Exception as exc:
+                state._log("api:gemini_failed", type(exc).__name__, str(exc))
+                _job_update(job_id, status="error", error=f"Gemini failed: {type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"ok": True, "job": job_id, "next": f"/loading_ai.html?job={job_id}"})
+
     try:
         annotate_txt_file(
             txt_path=txt_path,
@@ -1013,6 +1123,14 @@ def font_maker_preview(token: str):
     if not p.exists():
         return ("Not Found", 404)
     return redirect(f"/font_preview.html?token={token}")
+
+
+@app.get("/custom_font_generator/static/handwrite_template.pdf")
+def font_maker_template_pdf():
+    p = (CUSTOM_FONT_ROOT / "static" / "handwrite_template.pdf").resolve()
+    if not p.exists():
+        return ("Not Found", 404)
+    return send_file(str(p), mimetype="application/pdf", as_attachment=True, download_name="handwrite_template.pdf")
 
 
 @app.route("/custom_font_generator/<path:filename>")

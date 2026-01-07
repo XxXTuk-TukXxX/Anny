@@ -60,6 +60,7 @@ Python packages are listed in `requirements.txt`.
 - OCR requires system dependencies (Tesseract + Ghostscript).
   - If you use Railway’s Nixpacks builder, this repo includes `nixpacks.toml`; redeploy after adding it.
   - If you use Railway’s Railpack builder (log shows “Railpack”), it ignores `nixpacks.toml`. Use the provided `Dockerfile` and switch the service to Dockerfile builder.
+- Font Maker (Handwrite) needs OpenCV system libs on Linux. The `Dockerfile` installs `libgl1` so `cv2` can import in containers.
 
 ### Building a standalone app (optional)
 - Install PyInstaller: `pip install pyinstaller`

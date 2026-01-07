@@ -41,11 +41,11 @@
     try {
       var fd = new FormData();
       fd.append('file', file);
-      var res = await fetch('/api/upload_pdf', { method: 'POST', body: fd });
+      var res = await fetch('/api/upload_pdf?async=1', { method: 'POST', body: fd });
       var data = {};
       try { data = await res.json(); } catch(_) {}
       if (res.ok && data && data.ok) {
-        window.location.href = data.next || '/get_started.html';
+        window.location.href = data.next || '/loading_ocr.html';
         return;
       }
       alert((data && data.error) ? data.error : 'Upload failed.');
