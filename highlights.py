@@ -1104,12 +1104,9 @@ def highlight_and_margin_comment_pdf(
                 col = per_highlight_color.get(q, default_hi)
                 if hasattr(annot, "set_colors"):
                     try:
-                        annot.set_colors(stroke=col, fill=col)
+                        annot.set_colors(stroke=col)
                     except TypeError:
-                        try:
-                            annot.set_colors(stroke=col)
-                        except TypeError:
-                            pass
+                        pass
                 if hasattr(annot, "set_opacity"):
                     try:
                         annot.set_opacity(0.25)
@@ -1281,12 +1278,9 @@ def highlight_and_margin_comment_pdf(
             col = per_highlight_color.get(q, default_hi)
             if hasattr(annot, "set_colors"):
                 try:
-                    annot.set_colors(stroke=col, fill=col)
+                    annot.set_colors(stroke=col)
                 except TypeError:
-                    try:
-                        annot.set_colors(stroke=col)
-                    except TypeError:
-                        pass
+                    pass
             if hasattr(annot, "set_opacity"):
                 annot.set_opacity(0.25)
             if hasattr(annot, "update"):

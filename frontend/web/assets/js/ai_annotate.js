@@ -34,7 +34,7 @@
     }
     btn.disabled = true;
     try {
-      fetch('/api/start_gemini', {
+      fetch('/api/start_gemini?async=1', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: prompt })
@@ -42,7 +42,7 @@
       .then(function(res){ return res.json().then(function(data){ return { res: res, data: data }; }); })
       .then(function(r){
         if (r.res.ok && r.data && r.data.ok) {
-          window.location.href = r.data.next || '/preview.html';
+          window.location.href = r.data.next || '/loading_ai.html';
         } else {
           alert((r.data && r.data.error) ? r.data.error : 'Failed to start AI annotations.');
         }
