@@ -34,8 +34,10 @@ def _discover_bundled_tesseract() -> Optional[Path]:
         if meipass:
             candidates.append(Path(meipass) / "tesseract")
 
-    here = Path(__file__).resolve().parent
-    candidates.append(here.parent / "third_party" / "tesseract-macos")
+    # Bundled macOS dependencies are not usable on Linux/Windows containers.
+    if sys.platform == "darwin":
+        here = Path(__file__).resolve().parent
+        candidates.append(here.parent / "third_party" / "tesseract-macos")
 
     for base in candidates:
         try:
@@ -67,8 +69,10 @@ def _discover_bundled_ghostscript() -> Optional[Path]:
         if meipass:
             candidates.append(Path(meipass) / "ghostscript")
 
-    here = Path(__file__).resolve().parent
-    candidates.append(here.parent / "third_party" / "ghostscript-macos")
+    # Bundled macOS dependencies are not usable on Linux/Windows containers.
+    if sys.platform == "darwin":
+        here = Path(__file__).resolve().parent
+        candidates.append(here.parent / "third_party" / "ghostscript-macos")
 
     for base in candidates:
         try:
