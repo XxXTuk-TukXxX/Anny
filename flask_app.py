@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -18,7 +19,6 @@ import local_app as state
 from frontend.backend import run_ocr
 from frontend.defaults import DEFAULTS
 from frontend.colors import build_color_map
-from frontend.settings_store import get_effective_settings, save_user_settings
 from highlights import highlight_and_margin_comment_pdf, _import_fitz
 from models.gemini_annotaton import annotate_txt_file
 
@@ -27,6 +27,10 @@ CUSTOM_FONT_ROOT = Path(__file__).resolve().parent / "custom_font_generator"
 FONTS_ROOT = Path(__file__).resolve().parent / "fonts"
 FONT_MAKER_CACHE_DIR = Path(tempfile.gettempdir()) / "anny_font_maker"
 FONT_MAKER_CACHE_MAX_AGE_SECONDS = 60 * 60  # 1 hour
+
+_SETTINGS_COOKIE_NAME = "anny_settings_v1"
+_SETTINGS_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365  # 1 year
+_SETTINGS_COOKIE_SENSITIVE_KEYS = {"gemini_api_key"}
 
 app = Flask(__name__, static_folder=str(WEB_ROOT), static_url_path="")
 
@@ -53,6 +57,140 @@ def _save_upload(file_obj, fallback_name: str) -> Path:
     dest = tmp_dir / name
     file_obj.save(dest)
     return dest
+
+
+def _is_allowed_font_filename(name: str) -> bool:
+    try:
+        ext = Path(name).suffix.lower()
+    except Exception:
+        return False
+    return ext in {".ttf", ".otf", ".ttc", ".woff", ".woff2"}
+
+
+def _normalize_fontfile(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    if cleaned.startswith(".\\") or cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    cleaned = cleaned.replace("\\", "/")
+    while "//" in cleaned and not cleaned.startswith("//"):
+        cleaned = cleaned.replace("//", "/")
+    return cleaned
+
+
+def _decode_settings_cookie(raw: str) -> dict:
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        pad = "=" * (-len(raw) % 4)
+        data = base64.urlsafe_b64decode((raw + pad).encode("ascii"))
+        obj = json.loads(data.decode("utf-8"))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _encode_settings_cookie(patch: dict) -> str:
+    try:
+        data = json.dumps(patch, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+    except Exception:
+        return ""
+
+
+def _coerce_setting_value(key: str, val: object) -> object:
+    default_val = DEFAULTS.get(key)
+    if isinstance(default_val, bool):
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        if isinstance(val, str):
+            s = val.strip().lower()
+            if s in ("1", "true", "yes", "on"):
+                return True
+            if s in ("0", "false", "no", "off", ""):
+                return False
+        return bool(val)
+    if isinstance(default_val, int):
+        try:
+            return int(val)  # type: ignore[arg-type]
+        except Exception:
+            return default_val
+    if isinstance(default_val, float):
+        try:
+            return float(val)  # type: ignore[arg-type]
+        except Exception:
+            return default_val
+    # strings / other
+    return "" if val is None else str(val)
+
+
+def _load_settings_patch_from_cookie() -> dict[str, object]:
+    patch = _decode_settings_cookie(request.cookies.get(_SETTINGS_COOKIE_NAME, ""))
+    cleaned: dict[str, object] = {}
+    for k, v in patch.items():
+        if k not in DEFAULTS:
+            continue
+        if k in _SETTINGS_COOKIE_SENSITIVE_KEYS:
+            continue
+        try:
+            cleaned[k] = _coerce_setting_value(k, v)
+        except Exception:
+            continue
+    if "note_fontfile" in cleaned:
+        cleaned["note_fontfile"] = _normalize_fontfile(cleaned.get("note_fontfile"))
+    return cleaned
+
+
+def _effective_settings_from_request() -> dict[str, object]:
+    # Defaults + cookie patch (web deployments should avoid shared server-side state).
+    base = dict(DEFAULTS)
+    patch = _load_settings_patch_from_cookie()
+    for k, v in patch.items():
+        if k in base:
+            base[k] = v
+
+    # Ensure stable fontname and safe outputs
+    base["note_fontname"] = DEFAULTS.get("note_fontname", "AnnotateNote")
+    base["note_fontfile"] = _normalize_fontfile(base.get("note_fontfile"))
+    base["gemini_api_key"] = ""  # never return secrets from server-side storage
+    return base
+
+
+def _set_settings_cookie(resp, settings: dict[str, object]):
+    patch: dict[str, object] = {}
+    for k, default_val in DEFAULTS.items():
+        if k in _SETTINGS_COOKIE_SENSITIVE_KEYS:
+            continue
+        if k == "note_fontname":
+            continue
+        if k not in settings:
+            continue
+        v = settings.get(k)
+        if k == "note_fontfile":
+            v = _normalize_fontfile(v)
+        if v == default_val:
+            continue
+        patch[k] = v
+
+    val = _encode_settings_cookie(patch)
+    if not val:
+        return resp
+    try:
+        resp.set_cookie(
+            _SETTINGS_COOKIE_NAME,
+            val,
+            max_age=_SETTINGS_COOKIE_MAX_AGE_SECONDS,
+            samesite="Lax",
+            path="/",
+        )
+    except Exception:
+        pass
+    return resp
 
 
 def _missing_ocr_deps() -> list[str]:
@@ -128,7 +266,7 @@ def _build_preview_data_url() -> str:
     except Exception:
         pass
 
-    settings = state._resolved_settings()
+    settings = _effective_settings_from_request()
 
     def _ensure_plan():
         if manual:
@@ -423,7 +561,7 @@ def api_export_pdf():
     except Exception:
         pass
 
-    settings = state._resolved_settings()
+    settings = _effective_settings_from_request()
 
     fd, tmp_pdf = tempfile.mkstemp(suffix="_export.pdf")
     os.close(fd)
@@ -560,7 +698,7 @@ def _preview_meta() -> dict:
     manual = state._is_manual_mode()
     if not pdf_path or (not ann and not manual):
         return {"pages": [], "placements": [], "manual": manual}
-    settings = state._resolved_settings()
+    settings = _effective_settings_from_request()
 
     # Ensure plan + sizes exist (without generating a baked preview PDF).
     if manual:
@@ -961,19 +1099,68 @@ def api_start_gemini():
 
 @app.get("/api/settings")
 def api_get_settings():
-    return jsonify(get_effective_settings())
+    return jsonify(_effective_settings_from_request())
 
 
 @app.post("/api/settings")
 def api_save_settings():
     payload = request.get_json(silent=True) or {}
-    ok = save_user_settings(payload)
-    return jsonify({"ok": bool(ok)})
+    cur = _effective_settings_from_request()
+    try:
+        for k, v in dict(payload or {}).items():
+            if k not in DEFAULTS:
+                continue
+            if k in _SETTINGS_COOKIE_SENSITIVE_KEYS:
+                continue
+            if k == "note_fontname":
+                continue
+            cur[k] = _coerce_setting_value(k, v)
+        cur["note_fontname"] = DEFAULTS.get("note_fontname", "AnnotateNote")
+        cur["note_fontfile"] = _normalize_fontfile(cur.get("note_fontfile"))
+        cur["gemini_api_key"] = ""
+    except Exception:
+        pass
+
+    # Settings changes should invalidate cached placements/preview.
+    try:
+        state._PLACEMENTS = None
+        state._PREVIEW_PDF = None
+    except Exception:
+        pass
+
+    resp = jsonify({"ok": True})
+    return _set_settings_cookie(resp, cur)
 
 
 @app.get("/api/health")
 def api_health():
     return jsonify({"ok": True})
+
+
+@app.post("/api/upload_font")
+def api_upload_font():
+    file_obj = request.files.get("file")
+    if not file_obj:
+        return jsonify({"ok": False, "error": "No file provided."}), 400
+    if not _is_allowed_font_filename(file_obj.filename or ""):
+        return jsonify({"ok": False, "error": "Unsupported font type. Upload .ttf, .otf, .ttc, .woff, or .woff2."}), 400
+
+    uploads_dir = FONTS_ROOT / "uploads"
+    try:
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    safe_name = secure_filename(Path(file_obj.filename or "font.ttf").name) or "font.ttf"
+    token = uuid.uuid4().hex
+    dest = uploads_dir / f"{token}_{safe_name}"
+    try:
+        file_obj.save(dest)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to save font: {type(exc).__name__}: {exc}"}), 500
+
+    rel = f"fonts/uploads/{dest.name}"
+    return jsonify({"ok": True, "fontfile": rel})
 
 
 @app.get("/api/note_font")
@@ -982,7 +1169,7 @@ def api_note_font():
 
     This avoids relying on the browser being able to access local file paths.
     """
-    settings = state._resolved_settings()
+    settings = _effective_settings_from_request()
     fontfile = settings.get("note_fontfile")
     if not isinstance(fontfile, str) or not fontfile.strip():
         return ("Not Found", 404)

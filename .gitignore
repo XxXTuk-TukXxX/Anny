@@ -5,6 +5,9 @@ __pycache__/
 *.pdf
 !custom_font_generator/static/handwrite_template.pdf
 
+# Uploaded fonts (runtime)
+fonts/uploads/
+
 # Environment file
 .env
 
