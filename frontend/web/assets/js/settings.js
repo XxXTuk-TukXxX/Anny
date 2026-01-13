@@ -51,13 +51,33 @@
     picker.type = 'file';
     picker.accept = '.ttf,.otf,.ttc,.woff,.woff2';
     picker.style.display = 'none';
-    picker.addEventListener('change', function(){
-      if (picker.files && picker.files.length){
-        var f = picker.files[0];
-        var path = (f && (f.path || f.webkitRelativePath || f.name)) || '';
-        if (path){ apply(path); }
+    async function uploadFontInBrowser(file){
+      try {
+        var fd = new FormData();
+        fd.append('file', file);
+        var res = await fetch('/api/upload_font', { method: 'POST', body: fd });
+        var data = {};
+        try { data = await res.json(); } catch(_) {}
+        if (res.ok && data && data.ok && data.fontfile) {
+          apply(String(data.fontfile));
+          return true;
+        }
+        alert((data && data.error) ? data.error : 'Font upload failed.');
+      } catch (err) {
+        try { console.error(err); } catch(_) {}
+        alert('Font upload failed.');
       }
-      if (picker.parentNode){ picker.parentNode.removeChild(picker); }
+      return false;
+    }
+    picker.addEventListener('change', async function(){
+      try {
+        if (picker.files && picker.files.length){
+          var f = picker.files[0];
+          if (f) await uploadFontInBrowser(f);
+        }
+      } finally {
+        if (picker.parentNode){ picker.parentNode.removeChild(picker); }
+      }
     });
     document.body.appendChild(picker);
     picker.click();
