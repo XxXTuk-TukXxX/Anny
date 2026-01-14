@@ -1026,11 +1026,12 @@ async function renderFallbackPage(num) {
     overlay.addEventListener('mouseup', handleSecondaryMouse, true);
   }
 
-  overlay.addEventListener('mousedown', (e) => {
-    if (isFrozen()) return;
-    const t = e.target.closest('[data-uid]');
-    if (!t) return;
-    const onHandle = !!e.target.closest('[data-role="resize"]');
+  function beginDragFromTarget(target, clientX, clientY, pointerId) {
+    if (isFrozen()) return false;
+    const t = target && target.closest ? target.closest('[data-uid]') : null;
+    if (!t) return false;
+    if (dragState) return true;
+    const onHandle = !!(target && target.closest ? target.closest('[data-role="resize"]') : null);
     const uid = t.getAttribute('data-uid');
     const sx = parseFloat(t.getAttribute('data-sx') || '1');
     const sy = parseFloat(t.getAttribute('data-sy') || '1');
@@ -1038,12 +1039,35 @@ async function renderFallbackPage(num) {
     const y0 = parseFloat(t.getAttribute('data-y0') || '0');
     const x1 = parseFloat(t.getAttribute('data-x1') || '0');
     const y1 = parseFloat(t.getAttribute('data-y1') || '0');
-    dragState = { el: t, uid, sx, sy, x0, y0, x1, y1, startX: e.clientX, startY: e.clientY, mode: (onHandle ? 'resize' : 'move') };
-    e.preventDefault();
+    dragState = {
+      el: t, uid, sx, sy, x0, y0, x1, y1,
+      startX: clientX, startY: clientY,
+      mode: (onHandle ? 'resize' : 'move'),
+      pointerId: (typeof pointerId === 'number' ? pointerId : null),
+    };
+    return true;
+  }
+
+  overlay.addEventListener('mousedown', (e) => {
+    // If Pointer Events are supported, prefer those for both mouse and touch.
+    if (typeof window !== 'undefined' && 'PointerEvent' in window) return;
+    if (beginDragFromTarget(e.target, e.clientX, e.clientY, null)) {
+      e.preventDefault();
+    }
   });
+
+  overlay.addEventListener('pointerdown', (e) => {
+    // Touch/pen drag support (and modern mouse drag via Pointer Events).
+    if (!e) return;
+    if (beginDragFromTarget(e.target, e.clientX, e.clientY, e.pointerId)) {
+      try { dragState?.el?.setPointerCapture?.(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    }
+  }, { passive: false });
 
   window.addEventListener('mousemove', (e) => {
     if (!dragState) return;
+    if (dragState.pointerId !== null) return;
     const { el, sx, sy, startX, startY, x0, y0, x1, y1, mode } = dragState;
     const dx = (e.clientX - startX) / sx;
     const dy = (e.clientY - startY) / sy;
@@ -1066,6 +1090,7 @@ async function renderFallbackPage(num) {
 
   window.addEventListener('mouseup', async () => {
     if (!dragState) return;
+    if (dragState.pointerId !== null) return;
     const { uid } = dragState;
     const x0 = parseFloat(dragState.el.getAttribute('data-x0') || '0');
     const y0 = parseFloat(dragState.el.getAttribute('data-y0') || '0');
@@ -1079,6 +1104,52 @@ async function renderFallbackPage(num) {
       try { drawOverlay(pageNum, overlay?.clientWidth || 1, overlay?.clientHeight || 1, null); } catch (_) {}
     } catch {}
   });
+
+  window.addEventListener('pointermove', (e) => {
+    if (!dragState) return;
+    if (dragState.pointerId === null) return;
+    if (e.pointerId !== dragState.pointerId) return;
+    const { el, sx, sy, startX, startY, x0, y0, x1, y1, mode } = dragState;
+    const dx = (e.clientX - startX) / sx;
+    const dy = (e.clientY - startY) / sy;
+    if (mode === 'resize') {
+      const nx1 = Math.max(x0 + 10, x1 + dx);
+      const ny1 = Math.max(y0 + 10, y1 + dy);
+      el.style.width = px((nx1 - x0) * sx);
+      el.style.height = px((ny1 - y0) * sy);
+      el.setAttribute('data-x1', String(nx1));
+      el.setAttribute('data-y1', String(ny1));
+    } else {
+      const nx0 = x0 + dx, ny0 = y0 + dy, nx1 = x1 + dx, ny1 = y1 + dy;
+      el.style.left = px(nx0 * sx); el.style.top = px(ny0 * sy);
+      el.setAttribute('data-x0', String(nx0));
+      el.setAttribute('data-y0', String(ny0));
+      el.setAttribute('data-x1', String(nx1));
+      el.setAttribute('data-y1', String(ny1));
+    }
+    try { e.preventDefault(); } catch (_) {}
+  }, { passive: false });
+
+  async function endPointerDrag(e) {
+    if (!dragState) return;
+    if (dragState.pointerId === null) return;
+    if (e && e.pointerId !== dragState.pointerId) return;
+    const { uid } = dragState;
+    const x0 = parseFloat(dragState.el.getAttribute('data-x0') || '0');
+    const y0 = parseFloat(dragState.el.getAttribute('data-y0') || '0');
+    const x1 = parseFloat(dragState.el.getAttribute('data-x1') || '0');
+    const y1 = parseFloat(dragState.el.getAttribute('data-y1') || '0');
+    dragState = null;
+    try {
+      await setNoteRect(uid, x0, y0, x1, y1);
+      const pl = (overlayMeta?.placements || []).find(x => x.uid === uid);
+      if (pl) pl.note_rect = [x0, y0, x1, y1];
+      try { drawOverlay(pageNum, overlay?.clientWidth || 1, overlay?.clientHeight || 1, null); } catch (_) {}
+    } catch {}
+  }
+
+  window.addEventListener('pointerup', endPointerDrag, { passive: true });
+  window.addEventListener('pointercancel', endPointerDrag, { passive: true });
 
   // Shortcuts affecting selected element
   window.addEventListener('keydown', async (e) => {
