@@ -32,6 +32,8 @@ _SETTINGS_COOKIE_NAME = "anny_settings_v1"
 _SETTINGS_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365  # 1 year
 _SETTINGS_COOKIE_SENSITIVE_KEYS = {"gemini_api_key"}
 
+_GEMINI_BUSY_MESSAGE = "To many AI request right now. Please try again in 5min"
+
 app = Flask(__name__, static_folder=str(WEB_ROOT), static_url_path="")
 
 _FONT_MAKER_INDEX: dict[str, dict[str, object]] = {}
@@ -191,6 +193,43 @@ def _set_settings_cookie(resp, settings: dict[str, object]):
     except Exception:
         pass
     return resp
+
+
+def _gemini_is_busy_error(exc: Exception) -> bool:
+    """Return True when Gemini rejects due to load/rate limit/quota."""
+    try:
+        from google.genai.errors import APIError  # type: ignore
+    except Exception:
+        APIError = None  # type: ignore
+
+    try:
+        if APIError is not None and isinstance(exc, APIError):  # type: ignore[arg-type]
+            code = getattr(exc, "code", None)
+            status = str(getattr(exc, "status", "") or "").upper()
+            msg = str(getattr(exc, "message", "") or "").lower()
+            if code in (429, 503):
+                return True
+            if status in ("RESOURCE_EXHAUSTED", "UNAVAILABLE"):
+                return True
+            if "rate" in msg and "limit" in msg:
+                return True
+            if "quota" in msg and ("exceed" in msg or "exhaust" in msg):
+                return True
+    except Exception:
+        pass
+
+    # Fallback heuristic for unexpected wrapper exceptions
+    try:
+        s = str(exc).lower()
+        if "resource_exhausted" in s:
+            return True
+        if "too many requests" in s:
+            return True
+        if "rate limit" in s:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _missing_ocr_deps() -> list[str]:
@@ -790,6 +829,7 @@ def _preview_meta() -> dict:
             pg = _get(pl, "page_index", "page_index")
             rect = _get(pl, "note_rect", "note_rect")
             anchor = _get(pl, "anchor_rect", "anchor_rect")
+            hit_rects = _get(pl, "hit_rects", "hit_rects")
             if uid is None or pg is None or rect is None:
                 continue
             pg = int(pg)
@@ -804,6 +844,18 @@ def _preview_meta() -> dict:
                     at = _rect_tuple_any(anchor)
             except Exception:
                 at = None
+            ht = None
+            try:
+                if hit_rects is not None and isinstance(hit_rects, (list, tuple)):
+                    hlist = []
+                    for hr in hit_rects:
+                        rr = _rect_tuple_any(hr)
+                        if rr:
+                            hlist.append(rr)
+                    if hlist:
+                        ht = hlist
+            except Exception:
+                ht = None
             q = _get(pl, "query", "query")
             exp = _get(pl, "explanation", "explanation")
             try:
@@ -845,6 +897,7 @@ def _preview_meta() -> dict:
                     "page_index": pg,
                     "note_rect": rt,
                     "anchor_rect": at,
+                    "hit_rects": ht,
                     "query": q,
                     "explanation": exp,
                     "color": col,
@@ -856,7 +909,12 @@ def _preview_meta() -> dict:
         except Exception:
             continue
     pages = [{"index": i, "width": w, "height": h} for i, (w, h) in (state._PAGE_SIZES or {}).items()]
-    return {"pages": pages, "placements": placements, "manual": manual}
+    return {
+        "pages": pages,
+        "placements": placements,
+        "manual": manual,
+        "ai_prompt": (getattr(state, "_LAST_GEMINI_PROMPT", "") or ""),
+    }
 
 
 @app.get("/api/preview_meta")
@@ -1032,6 +1090,10 @@ def api_start_gemini():
     pdf_path = state._OCR_PDF or state._SRC_PDF
     if not pdf_path:
         return jsonify({"ok": False, "error": "Upload a PDF first."}), 400
+    try:
+        state._LAST_GEMINI_PROMPT = prompt
+    except Exception:
+        pass
 
     def _extract_pdf_text_to_temp(path: str) -> str | None:
         try:
@@ -1075,7 +1137,10 @@ def api_start_gemini():
                 _job_update(job_id, status="done", next="/preview.html")
             except Exception as exc:
                 state._log("api:gemini_failed", type(exc).__name__, str(exc))
-                _job_update(job_id, status="error", error=f"Gemini failed: {type(exc).__name__}: {exc}")
+                if _gemini_is_busy_error(exc):
+                    _job_update(job_id, status="error", error=_GEMINI_BUSY_MESSAGE)
+                else:
+                    _job_update(job_id, status="error", error=f"Gemini failed: {type(exc).__name__}: {exc}")
 
         threading.Thread(target=_run, daemon=True).start()
         return jsonify({"ok": True, "job": job_id, "next": f"/loading_ai.html?job={job_id}"})
@@ -1090,10 +1155,172 @@ def api_start_gemini():
         )
     except Exception as exc:
         state._log("api:gemini_failed", type(exc).__name__, str(exc))
+        if _gemini_is_busy_error(exc):
+            resp = jsonify({"ok": False, "error": _GEMINI_BUSY_MESSAGE})
+            try:
+                resp.headers["Retry-After"] = "300"
+            except Exception:
+                pass
+            return resp, 429
         return jsonify({"ok": False, "error": f"Gemini failed: {type(exc).__name__}: {exc}"}), 500
 
     state._ANN_JSON = out_json
     state._reset_annotation_state(manual=False)
+    return jsonify({"ok": True, "next": "/preview.html", "ann": out_json})
+
+
+@app.post("/api/annotate_page")
+def api_annotate_page():
+    """Run Gemini on a single page and merge results into the current annotations JSON."""
+    payload = request.get_json(silent=True) or {}
+    async_mode = str(request.args.get("async", "")).strip().lower() in ("1", "true", "yes")
+
+    raw_page = payload.get("page_index")
+    if raw_page is None:
+        raw_page = payload.get("page")
+    try:
+        page_index = int(raw_page if raw_page is not None else 0)
+    except Exception:
+        page_index = 0
+    page_index = max(0, page_index)
+
+    prompt_override = (payload.get("prompt") or "").strip()
+    base_prompt = str(getattr(state, "_LAST_GEMINI_PROMPT", "") or "").strip()
+    if prompt_override and not base_prompt:
+        try:
+            state._LAST_GEMINI_PROMPT = prompt_override
+        except Exception:
+            pass
+    prompt = prompt_override or base_prompt
+    if not prompt:
+        return jsonify({"ok": False, "error": "Missing prompt. Enter a prompt first."}), 400
+
+    model = (payload.get("model") or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    try:
+        max_items = int(payload.get("max_items") or 8)
+    except Exception:
+        max_items = 8
+    max_items = max(1, min(50, max_items))
+
+    pdf_path = state._OCR_PDF or state._SRC_PDF
+    if not pdf_path:
+        return jsonify({"ok": False, "error": "Upload a PDF first."}), 400
+
+    out_json = str(state._ANN_JSON or "") or (str(Path(pdf_path).with_suffix("")) + "__annotations.json")
+
+    def _extract_pdf_page_text_to_temp(path: str, idx: int) -> str | None:
+        try:
+            fitz = _import_fitz()
+            doc = fitz.open(path)
+            if idx < 0:
+                idx = 0
+            if idx >= len(doc):
+                idx = len(doc) - 1
+            pg = doc[idx]
+            try:
+                txt = pg.get_text("text") or ""
+            except Exception:
+                txt = pg.get_text() or ""
+            doc.close()
+            if not str(txt).strip():
+                return None
+            fd, tmp = tempfile.mkstemp(suffix=f"_gemini_page{idx}.txt")
+            os.close(fd)
+            Path(tmp).write_text(str(txt), encoding="utf-8")
+            return tmp
+        except Exception:
+            return None
+
+    def _load_ann_list(path: str) -> list[dict]:
+        try:
+            p = Path(path)
+            if not p.exists():
+                return []
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data = [data]
+            return [row for row in data if isinstance(row, dict)]
+        except Exception:
+            return []
+
+    def _merge_ann(existing: list[dict], new_items: list[dict]) -> list[dict]:
+        seen: set[str] = set()
+        merged: list[dict] = []
+        for row in existing:
+            q = str(row.get("quote") or row.get("query") or "").strip()
+            if q and q not in seen:
+                seen.add(q)
+            merged.append(row)
+        for row in new_items:
+            if not isinstance(row, dict):
+                continue
+            q = str(row.get("quote") or row.get("query") or "").strip()
+            if not q or q in seen:
+                continue
+            seen.add(q)
+            merged.append(row)
+        return merged
+
+    def _run_once() -> None:
+        txt_path = _extract_pdf_page_text_to_temp(pdf_path, page_index)
+        if not txt_path:
+            raise RuntimeError("Failed to extract text from that page for Gemini.")
+        fd, tmp_json = tempfile.mkstemp(suffix="_gemini_page_ann.json")
+        os.close(fd)
+        try:
+            new_items = annotate_txt_file(
+                txt_path=txt_path,
+                objective=prompt,
+                outfile=tmp_json,
+                model=model,
+                max_items_hint=max_items,
+            )
+        finally:
+            try:
+                Path(txt_path).unlink()
+            except Exception:
+                pass
+            try:
+                Path(tmp_json).unlink()
+            except Exception:
+                pass
+        existing = _load_ann_list(out_json)
+        merged = _merge_ann(existing, new_items or [])
+        Path(out_json).write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        state._ANN_JSON = out_json
+        state._reset_annotation_state(manual=False)
+
+    if async_mode:
+        job_id = _job_create("gemini_page")
+        _job_update(job_id, status="running")
+
+        def _worker():
+            try:
+                _run_once()
+                _job_update(job_id, status="done", next="/preview.html")
+            except Exception as exc:
+                state._log("api:annotate_page_failed", type(exc).__name__, str(exc))
+                if _gemini_is_busy_error(exc):
+                    _job_update(job_id, status="error", error=_GEMINI_BUSY_MESSAGE)
+                else:
+                    _job_update(job_id, status="error", error=f"AI annotate failed: {type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return jsonify({"ok": True, "job": job_id})
+
+    try:
+        _run_once()
+    except Exception as exc:
+        state._log("api:annotate_page_failed", type(exc).__name__, str(exc))
+        if _gemini_is_busy_error(exc):
+            resp = jsonify({"ok": False, "error": _GEMINI_BUSY_MESSAGE})
+            try:
+                resp.headers["Retry-After"] = "300"
+            except Exception:
+                pass
+            return resp, 429
+        return jsonify({"ok": False, "error": f"AI annotate failed: {type(exc).__name__}: {exc}"}), 500
     return jsonify({"ok": True, "next": "/preview.html", "ann": out_json})
 
 
@@ -1214,6 +1441,56 @@ def serve_legacy_web_path(filename: str):
         return send_from_directory(WEB_ROOT, "upload.html")
     return ("Not Found", 404)
 
+def _parse_font_thickness_param() -> int:
+    raw = str(request.args.get("thickness", "") or "").strip()
+    if not raw:
+        return 0
+    try:
+        t = int(float(raw))
+    except Exception:
+        return 0
+    return max(0, min(200, t))
+
+
+def _font_maker_thickened_path(token: str, thickness: int) -> Path:
+    cache_root = _font_maker_cache_root()
+    return cache_root / f"{token}__thick{thickness}.ttf"
+
+
+def _ensure_font_maker_thickened_ttf(src: Path, token: str, thickness: int) -> Path:
+    """Generate (and cache) a thickened TTF variant using FontForge."""
+    out = _font_maker_thickened_path(token, thickness)
+    try:
+        if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+            return out
+    except Exception:
+        pass
+
+    if shutil.which("fontforge") is None:
+        raise RuntimeError("Missing dependency: fontforge")
+
+    tmp = out.with_suffix(f".tmp_{uuid.uuid4().hex}.ttf")
+    script = f'Open($1); SelectAll(); ChangeWeight({int(thickness)}); Generate($2);'
+    try:
+        subprocess.run(
+            ["fontforge", "-lang=ff", "-c", script, str(src), str(tmp)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        try:
+            tmp.replace(out)
+        except Exception:
+            shutil.move(str(tmp), str(out))
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+
+    return out
+
 
 def _font_maker_cache_root() -> Path:
     try:
@@ -1261,6 +1538,14 @@ def font_maker_font_file(token: str):
     p = Path(str(meta.get("path") or ""))
     if not p.exists():
         return ("Not Found", 404)
+
+    thickness = _parse_font_thickness_param()
+    if thickness > 0:
+        try:
+            p = _ensure_font_maker_thickened_ttf(p, str(token), thickness)
+        except Exception:
+            # Best effort: fall back to the original font so preview doesn't break.
+            pass
     resp = send_file(str(p), mimetype="font/ttf")
     try:
         resp.headers["Cache-Control"] = "no-store"
@@ -1283,6 +1568,14 @@ def font_maker_download(token: str):
     if not p.exists():
         return ("Not Found", 404)
     name = str(meta.get("name") or p.name or "handwriting.ttf")
+    thickness = _parse_font_thickness_param()
+    if thickness > 0:
+        try:
+            p = _ensure_font_maker_thickened_ttf(p, str(token), thickness)
+        except Exception as exc:
+            return (f"Failed to thicken font: {type(exc).__name__}: {exc}", 500)
+        base = Path(name).stem or "handwriting"
+        name = f"{base}_thick{thickness}.ttf"
     return send_file(str(p), mimetype="font/ttf", as_attachment=True, download_name=name)
 
 
@@ -1462,6 +1755,7 @@ def font_maker_index():
 
 if __name__ == "__main__":
     # Flask dev server for running the app as a web experience.
+    #TODO: Highlight part of the text so that you could annotate "annotate with AI"
     port = int(os.environ.get("PORT", "5001"))
     debug = str(os.environ.get("FLASK_DEBUG", "")).strip().lower() in ("1", "true", "yes")
     app.run(host="0.0.0.0", port=port, debug=debug)

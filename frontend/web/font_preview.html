@@ -38,29 +38,35 @@ abcdefghijklmnopqrstuvwxyz
           >
         </div>
 
-        <div class="flex items-center gap-4">
-          <label for="size" class="text-sm font-semibold text-gray-800">Size</label>
-          <input id="size" type="range" min="12" max="96" value="48" class="w-full" />
-          <div id="sizeVal" class="w-12 text-right text-sm text-gray-600">48px</div>
-        </div>
+	        <div class="flex items-center gap-4">
+	          <label for="size" class="text-sm font-semibold text-gray-800">Size</label>
+	          <input id="size" type="range" min="12" max="96" value="48" class="w-full" />
+	          <div id="sizeVal" class="w-12 text-right text-sm text-gray-600">48px</div>
+	        </div>
 
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div class="flex items-center gap-4">
-            <label for="letter" class="w-28 text-sm font-semibold text-gray-800">Letter</label>
-            <input id="letter" type="range" min="-2" max="20" step="0.5" value="0" class="w-full" />
-            <div id="letterVal" class="w-12 text-right text-sm text-gray-600">0px</div>
-          </div>
-          <div class="flex items-center gap-4">
-            <label for="word" class="w-28 text-sm font-semibold text-gray-800">Word</label>
-            <input id="word" type="range" min="0" max="40" step="1" value="0" class="w-full" />
-            <div id="wordVal" class="w-12 text-right text-sm text-gray-600">0px</div>
-          </div>
-          <div class="flex items-center gap-4">
-            <label for="line" class="w-28 text-sm font-semibold text-gray-800">Line</label>
-            <input id="line" type="range" min="0.8" max="2.5" step="0.05" value="1.2" class="w-full" />
-            <div id="lineVal" class="w-12 text-right text-sm text-gray-600">1.20</div>
-          </div>
-        </div>
+	        <div class="flex items-center gap-4">
+	          <label for="thickness" class="text-sm font-semibold text-gray-800">Thickness</label>
+	          <input id="thickness" type="range" min="0" max="200" step="5" value="0" class="w-full" />
+	          <div id="thicknessVal" class="w-12 text-right text-sm text-gray-600">0</div>
+	        </div>
+
+	        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+	          <div class="flex items-center gap-4">
+	            <label for="letter" class="w-28 text-sm font-semibold text-gray-800">Letter</label>
+	            <input id="letter" type="range" min="-10" max="20" step="0.5" value="0" class="w-full" />
+	            <div id="letterVal" class="w-12 text-right text-sm text-gray-600">0px</div>
+	          </div>
+	          <div class="flex items-center gap-4">
+	            <label for="word" class="w-28 text-sm font-semibold text-gray-800">Word</label>
+	            <input id="word" type="range" min="-20" max="40" step="1" value="0" class="w-full" />
+	            <div id="wordVal" class="w-12 text-right text-sm text-gray-600">0px</div>
+	          </div>
+	          <div class="flex items-center gap-4">
+	            <label for="line" class="w-28 text-sm font-semibold text-gray-800">Line</label>
+	            <input id="line" type="range" min="0.30" max="2.5" step="0.05" value="1.2" class="w-full" />
+	            <div id="lineVal" class="w-12 text-right text-sm text-gray-600">1.20</div>
+	          </div>
+	        </div>
 
         <div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <div id="preview" class="preview-font whitespace-pre-wrap leading-tight"></div>
@@ -88,12 +94,14 @@ abcdefghijklmnopqrstuvwxyz
     <script>
       const txt = document.getElementById("txt");
       const preview = document.getElementById("preview");
-      const size = document.getElementById("size");
-      const sizeVal = document.getElementById("sizeVal");
-      const letter = document.getElementById("letter");
-      const letterVal = document.getElementById("letterVal");
-      const word = document.getElementById("word");
-      const wordVal = document.getElementById("wordVal");
+	      const size = document.getElementById("size");
+	      const sizeVal = document.getElementById("sizeVal");
+	      const thickness = document.getElementById("thickness");
+	      const thicknessVal = document.getElementById("thicknessVal");
+	      const letter = document.getElementById("letter");
+	      const letterVal = document.getElementById("letterVal");
+	      const word = document.getElementById("word");
+	      const wordVal = document.getElementById("wordVal");
       const line = document.getElementById("line");
       const lineVal = document.getElementById("lineVal");
       const missingToken = document.getElementById("missingToken");
@@ -101,17 +109,25 @@ abcdefghijklmnopqrstuvwxyz
       const fileName = document.getElementById("fileName");
       const resetBtn = document.getElementById("resetBtn");
 
-      const DEFAULTS = {
-        size: 48,
-        letter: 0,
-        word: 0,
-        line: 1.2,
-      };
+	      const DEFAULTS = {
+	        size: 48,
+	        thickness: 0,
+	        letter: 0,
+	        word: 0,
+	        line: 1.2,
+	      };
 
-      function getToken() {
-        try {
-          const params = new URLSearchParams(window.location.search);
-          const token = (params.get("token") || "").trim();
+	      function clampThickness(v) {
+	        const n = parseInt(v || "0", 10);
+	        if (!isFinite(n) || n < 0) return 0;
+	        if (n > 200) return 200;
+	        return n;
+	      }
+
+	      function getToken() {
+	        try {
+	          const params = new URLSearchParams(window.location.search);
+	          const token = (params.get("token") || "").trim();
           return token ? token : null;
         } catch (e) {
           return null;
@@ -120,13 +136,16 @@ abcdefghijklmnopqrstuvwxyz
 
       function sync() {
         preview.textContent = txt.value;
-        const px = parseInt(size.value || "48", 10);
-        preview.style.fontSize = px + "px";
-        sizeVal.textContent = px + "px";
+	        const px = parseInt(size.value || "48", 10);
+	        preview.style.fontSize = px + "px";
+	        sizeVal.textContent = px + "px";
 
-        const letterPx = parseFloat(letter.value || "0");
-        preview.style.letterSpacing = letterPx + "px";
-        letterVal.textContent = (Math.round(letterPx * 100) / 100).toString() + "px";
+	        const thick = clampThickness(thickness.value || "0");
+	        thicknessVal.textContent = thick.toString();
+
+	        const letterPx = parseFloat(letter.value || "0");
+	        preview.style.letterSpacing = letterPx + "px";
+	        letterVal.textContent = (Math.round(letterPx * 100) / 100).toString() + "px";
 
         const wordPx = parseFloat(word.value || "0");
         preview.style.wordSpacing = wordPx + "px";
@@ -137,45 +156,73 @@ abcdefghijklmnopqrstuvwxyz
         lineVal.textContent = lineValNum.toFixed(2);
       }
 
-      txt.addEventListener("input", sync);
-      size.addEventListener("input", sync);
-      letter.addEventListener("input", sync);
-      word.addEventListener("input", sync);
-      line.addEventListener("input", sync);
+	      txt.addEventListener("input", sync);
+	      size.addEventListener("input", sync);
+	      thickness.addEventListener("input", sync);
+	      letter.addEventListener("input", sync);
+	      word.addEventListener("input", sync);
+	      line.addEventListener("input", sync);
 
-      resetBtn.addEventListener("click", () => {
-        size.value = DEFAULTS.size.toString();
-        letter.value = DEFAULTS.letter.toString();
-        word.value = DEFAULTS.word.toString();
-        line.value = DEFAULTS.line.toString();
-        sync();
-      });
+	      resetBtn.addEventListener("click", () => {
+	        size.value = DEFAULTS.size.toString();
+	        thickness.value = DEFAULTS.thickness.toString();
+	        letter.value = DEFAULTS.letter.toString();
+	        word.value = DEFAULTS.word.toString();
+	        line.value = DEFAULTS.line.toString();
+	        sync();
+	      });
 
-      const token = getToken();
-      if (!token) {
-        missingToken.classList.remove("hidden");
-        downloadBtn.setAttribute("aria-disabled", "true");
-        downloadBtn.classList.add("pointer-events-none", "opacity-50");
-        sync();
-      } else {
-        const safe = encodeURIComponent(token);
-        const style = document.createElement("style");
-        style.textContent = `@font-face { font-family: "AnnyPreviewFont"; src: url("/custom_font_generator/font/${safe}.ttf") format("truetype"); font-weight: 400; font-style: normal; }`;
-        document.head.appendChild(style);
+	      const token = getToken();
+	      if (!token) {
+	        missingToken.classList.remove("hidden");
+	        downloadBtn.setAttribute("aria-disabled", "true");
+	        downloadBtn.classList.add("pointer-events-none", "opacity-50");
+	        sync();
+	      } else {
+	        const safe = encodeURIComponent(token);
+	        const styleId = "__anny_preview_font_face";
+	        let style = document.getElementById(styleId);
+	        if (!style) {
+	          style = document.createElement("style");
+	          style.id = styleId;
+	          document.head.appendChild(style);
+	        }
 
-        downloadBtn.href = `/custom_font_generator/download/${safe}`;
+	        let applyTimer = null;
+	        let lastApplied = null;
+	        function applyThickness() {
+	          const thick = clampThickness(thickness.value || "0");
+	          if (!thick && lastApplied === 0) return;
+	          if (thick === lastApplied) return;
+	          lastApplied = thick;
 
-        fetch(`/custom_font_generator/meta/${safe}`)
-          .then((r) => r.json())
-          .then((j) => {
+	          const family = `AnnyPreviewFont_t${thick}`;
+	          preview.style.fontFamily = `"${family}", system-ui, -apple-system, "Segoe UI", sans-serif`;
+	          const url = `/custom_font_generator/font/${safe}.ttf?thickness=${encodeURIComponent(thick)}&ts=${Date.now()}`;
+	          style.textContent = `@font-face { font-family: "${family}"; src: url("${url}") format("truetype"); font-weight: 400; font-style: normal; }`;
+
+	          downloadBtn.href = `/custom_font_generator/download/${safe}?thickness=${encodeURIComponent(thick)}`;
+	        }
+	        function scheduleApply() {
+	          if (applyTimer) clearTimeout(applyTimer);
+	          applyTimer = setTimeout(applyThickness, 250);
+	        }
+
+	        thickness.addEventListener("input", scheduleApply);
+	        thickness.addEventListener("change", applyThickness);
+	        applyThickness();
+
+	        fetch(`/custom_font_generator/meta/${safe}`)
+	          .then((r) => r.json())
+	          .then((j) => {
             if (j && j.ok && j.name) {
               fileName.textContent = `File: ${j.name}`;
             }
           })
-          .catch(() => {});
+	          .catch(() => {});
 
-        sync();
-      }
-    </script>
-  </body>
-</html>
+	        sync();
+	      }
+	    </script>
+	  </body>
+	</html>

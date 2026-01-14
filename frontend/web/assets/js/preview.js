@@ -347,6 +347,163 @@ async function renderFallbackPage(num) {
     else { if (window.__pageCount && pageNum >= window.__pageCount) return; pageNum++; await renderFallbackPage(pageNum); }
   });
   document.getElementById('refreshBtn')?.addEventListener('click', async () => { await refreshPreview(); });
+
+  // -------- AI: annotate current page (web only) --------
+  const $aiBtn = document.getElementById('aiAnnotatePageBtn');
+  const $aiModal = document.getElementById('aiPageModal');
+  const $aiClose = document.getElementById('aiPageCloseBtn');
+  const $aiCancel = document.getElementById('aiPageCancelBtn');
+  const $aiRun = document.getElementById('aiPageRunBtn');
+  const $aiPrompt = document.getElementById('aiPagePrompt');
+  const $aiReset = document.getElementById('aiPageUseOriginalBtn');
+  const $aiError = document.getElementById('aiPageError');
+  const $aiForm = document.getElementById('aiPageForm');
+  const $aiWorking = document.getElementById('aiPageWorking');
+  let aiBusy = false;
+
+  function _aiShowError(msg) {
+    if ($aiError) {
+      $aiError.textContent = msg || 'Request failed.';
+      $aiError.classList.remove('hidden');
+    } else {
+      alert(msg || 'Request failed.');
+    }
+  }
+  function _aiClearError() {
+    if ($aiError) {
+      $aiError.textContent = '';
+      $aiError.classList.add('hidden');
+    }
+  }
+  function _aiSetWorking(on) {
+    aiBusy = !!on;
+    if ($aiForm) $aiForm.classList.toggle('hidden', !!on);
+    if ($aiWorking) $aiWorking.classList.toggle('hidden', !on);
+    if ($aiRun) $aiRun.disabled = !!on;
+    if ($aiCancel) $aiCancel.disabled = !!on;
+    if ($aiClose) $aiClose.disabled = !!on;
+    if ($aiPrompt) $aiPrompt.disabled = !!on;
+    if ($aiReset) $aiReset.disabled = !!on;
+  }
+  function _aiOpen(originalPrompt) {
+    if (!$aiModal) return;
+    _aiClearError();
+    _aiSetWorking(false);
+    try {
+      if ($aiPrompt) {
+        const existing = ($aiPrompt.value || '').trim();
+        if (!existing) $aiPrompt.value = (originalPrompt || '').toString();
+      }
+    } catch (_) {}
+    $aiModal.style.display = 'flex';
+    try { $aiPrompt?.focus(); } catch (_) {}
+  }
+  function _aiCloseModal() {
+    if (!$aiModal) return;
+    if (aiBusy) return;
+    _aiClearError();
+    _aiSetWorking(false);
+    $aiModal.style.display = 'none';
+  }
+
+  async function _pollJob(jobId) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 10 * 60 * 1000) {
+      try {
+        const res = await fetch('/api/job/' + encodeURIComponent(jobId) + '?ts=' + Date.now());
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data && data.ok) {
+          if (data.status === 'done') return { ok: true, data };
+          if (data.status === 'error') return { ok: false, error: (data.error || 'Request failed.') };
+        }
+      } catch (_) {
+        // transient error -> keep polling
+      }
+      await new Promise(r => setTimeout(r, 800));
+    }
+    return { ok: false, error: 'This is taking longer than expected. Please try again.' };
+  }
+
+  async function _aiRunAnnotatePage() {
+    _aiClearError();
+    _aiSetWorking(true);
+    const pageIndex0 = Math.max(0, (pageNum || 1) - 1);
+    const promptText = ($aiPrompt?.value || '').toString();
+
+    try {
+      // Desktop mode: use pywebview bridge if available.
+      if (window.pywebview?.api?.annotate_page) {
+        const r = await window.pywebview.api.annotate_page(pageIndex0, promptText);
+        if (r && typeof r === 'object' && r.ok === false) {
+          throw new Error(r.error || 'AI annotate failed.');
+        }
+        if (r === false) {
+          throw new Error('AI annotate failed.');
+        }
+        _aiSetWorking(false);
+        _aiCloseModal();
+        await refreshPreview();
+        return;
+      }
+
+      const payload = { page_index: pageIndex0, prompt: promptText };
+      const res = await fetch('/api/annotate_page?async=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data || !data.ok || !data.job) {
+        const msg = (data && data.error) ? String(data.error) : ('Failed to start AI annotations (' + res.status + ')');
+        _aiSetWorking(false);
+        _aiShowError(msg);
+        return;
+      }
+
+      const result = await _pollJob(String(data.job));
+      if (!result.ok) {
+        _aiSetWorking(false);
+        _aiShowError(result.error || 'Request failed.');
+        return;
+      }
+
+      _aiSetWorking(false);
+      _aiCloseModal();
+      await refreshPreview();
+    } catch (e) {
+      _aiSetWorking(false);
+      _aiShowError(e?.message || String(e));
+    }
+  }
+
+  if ($aiBtn && $aiModal) {
+    $aiBtn.addEventListener('click', async () => {
+      try {
+        if (!overlayMeta) await loadOverlayMeta();
+      } catch (_) {}
+      const original = (overlayMeta && typeof overlayMeta === 'object' && overlayMeta.ai_prompt) ? String(overlayMeta.ai_prompt) : '';
+      _aiOpen(original);
+    });
+    $aiClose?.addEventListener('click', _aiCloseModal);
+    $aiCancel?.addEventListener('click', _aiCloseModal);
+    $aiModal.addEventListener('click', (e) => {
+      try {
+        if (!aiBusy && e.target === $aiModal) _aiCloseModal();
+      } catch (_) {}
+    });
+    window.addEventListener('keydown', (e) => {
+      if (!aiBusy && e.key === 'Escape' && $aiModal.style.display === 'flex') _aiCloseModal();
+    });
+    $aiReset?.addEventListener('click', async () => {
+      try {
+        if (!overlayMeta) await loadOverlayMeta();
+      } catch (_) {}
+      const original = (overlayMeta && typeof overlayMeta === 'object' && overlayMeta.ai_prompt) ? String(overlayMeta.ai_prompt) : '';
+      if ($aiPrompt) $aiPrompt.value = original;
+    });
+    $aiRun?.addEventListener('click', _aiRunAnnotatePage);
+  }
+
   document.getElementById('addBoxBtn')?.addEventListener('click', async () => {
     try {
       if (!overlayMeta) {
@@ -644,26 +801,31 @@ async function renderFallbackPage(num) {
     const placements = (overlayMeta.placements || []).filter(p => p.page_index === pageIndex);
 
     // Highlight overlay (fast preview): show where the note refers to.
-    // We use the placement's anchor_rect (block around the hit) and match the
-    // baked PDF highlight opacity (0.25) from `highlights.py`.
+    // Prefer precise hit rectangles (if available), else fall back to the
+    // placement's anchor_rect (block around the hit). Match baked PDF highlight
+    // opacity (0.25) from `highlights.py`.
     for (const p of placements) {
       try {
-        const ar = p.anchor_rect;
-        if (!ar || !Array.isArray(ar) || ar.length !== 4) continue;
-        const ax0 = ar[0] ?? 0, ay0 = ar[1] ?? 0, ax1 = ar[2] ?? 0, ay1 = ar[3] ?? 0;
-        const aw = (ax1 - ax0) * scaleX, ah = (ay1 - ay0) * scaleY;
-        if (!(aw > 0) || !(ah > 0)) continue;
-        const col = p.highlight_color || p.color || '#ff9800';
-        const hl = document.createElement('div');
-        hl.className = 'absolute';
-        hl.style.left = px(ax0 * scaleX);
-        hl.style.top = px(ay0 * scaleY);
-        hl.style.width = px(aw);
-        hl.style.height = px(ah);
-        hl.style.backgroundColor = col;
-        hl.style.opacity = '0.25';
-        hl.style.pointerEvents = 'none';
-        overlay.appendChild(hl);
+        const rects = (Array.isArray(p.hit_rects) && p.hit_rects.length)
+          ? p.hit_rects
+          : (p.anchor_rect ? [p.anchor_rect] : []);
+        for (const ar of rects) {
+          if (!ar || !Array.isArray(ar) || ar.length !== 4) continue;
+          const ax0 = ar[0] ?? 0, ay0 = ar[1] ?? 0, ax1 = ar[2] ?? 0, ay1 = ar[3] ?? 0;
+          const aw = (ax1 - ax0) * scaleX, ah = (ay1 - ay0) * scaleY;
+          if (!(aw > 0) || !(ah > 0)) continue;
+          const col = p.highlight_color || p.color || '#ff9800';
+          const hl = document.createElement('div');
+          hl.className = 'absolute';
+          hl.style.left = px(ax0 * scaleX);
+          hl.style.top = px(ay0 * scaleY);
+          hl.style.width = px(aw);
+          hl.style.height = px(ah);
+          hl.style.backgroundColor = col;
+          hl.style.opacity = '0.25';
+          hl.style.pointerEvents = 'none';
+          overlay.appendChild(hl);
+        }
       } catch (_) {}
     }
 

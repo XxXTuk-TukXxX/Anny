@@ -217,6 +217,7 @@ _SETTINGS_URL: Optional[str] = None
 _SRC_PDF: Optional[str] = None
 _OCR_PDF: Optional[str] = None
 _ANN_JSON: Optional[str] = None
+_LAST_GEMINI_PROMPT: Optional[str] = None
 _PREVIEW_PDF: Optional[str] = None
 _FREEZE_LAYOUT: bool = False
 _AUTO_REFRESH: bool = True
@@ -549,6 +550,9 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                         pass
                 return False
 
+            global _LAST_GEMINI_PROMPT
+            _LAST_GEMINI_PROMPT = (prompt or "").strip()
+
             # Navigate to working page shortly AFTER return to JS to keep callback intact
             def _go_working():
                 ww = _wnd()
@@ -632,6 +636,106 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 return True
             except Exception:
                 return False
+
+        def annotate_page(self, page_index: int, prompt: str = "", model: str = "gemini-2.5-flash", max_items: int = 8):
+            """Run Gemini on a single page and merge results into the current annotations JSON."""
+            global _ANN_JSON, _LAST_GEMINI_PROMPT
+
+            pdf_path = _OCR_PDF or _SRC_PDF
+            if not pdf_path:
+                return {"ok": False, "error": "No PDF selected."}
+
+            raw_prompt = (prompt or "").strip()
+            base_prompt = (_LAST_GEMINI_PROMPT or "").strip()
+            objective = raw_prompt or base_prompt
+            if not objective:
+                return {"ok": False, "error": "Missing prompt. Enter a prompt first."}
+            if raw_prompt and not base_prompt:
+                _LAST_GEMINI_PROMPT = raw_prompt
+
+            out_json = _ANN_JSON or (str(Path(pdf_path).with_suffix("")) + "__annotations.json")
+
+            try:
+                fitz = _import_fitz()
+                doc = fitz.open(pdf_path)
+                idx = int(page_index)
+                if idx < 0:
+                    idx = 0
+                if idx >= len(doc):
+                    idx = len(doc) - 1
+                pg = doc[idx]
+                try:
+                    txt = pg.get_text("text") or ""
+                except Exception:
+                    txt = pg.get_text() or ""
+                doc.close()
+            except Exception as e:
+                return {"ok": False, "error": f"Failed to extract page text: {type(e).__name__}: {e}"}
+
+            if not str(txt).strip():
+                return {"ok": False, "error": "No extractable text found on this page."}
+
+            fd, tmp_txt = tempfile.mkstemp(suffix=f"_gemini_page{page_index}.txt")
+            os.close(fd)
+            fd, tmp_json = tempfile.mkstemp(suffix="_gemini_page_ann.json")
+            os.close(fd)
+            try:
+                Path(tmp_txt).write_text(str(txt), encoding="utf-8")
+                from models.gemini_annotaton import annotate_txt_file as gemini_annotate  # lazy import
+
+                new_items = gemini_annotate(
+                    txt_path=tmp_txt,
+                    objective=objective,
+                    outfile=tmp_json,
+                    model=(model or "gemini-2.5-flash").strip() or "gemini-2.5-flash",
+                    max_items_hint=int(max_items or 8),
+                )
+            except Exception as e:
+                return {"ok": False, "error": f"Gemini failed: {type(e).__name__}: {e}"}
+            finally:
+                for p in (tmp_txt, tmp_json):
+                    try:
+                        Path(p).unlink()
+                    except Exception:
+                        pass
+
+            # Merge new items into existing annotations
+            existing: list[dict] = []
+            try:
+                p = Path(out_json)
+                if p.exists():
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    if isinstance(data, dict):
+                        data = [data]
+                    if isinstance(data, list):
+                        existing = [row for row in data if isinstance(row, dict)]
+            except Exception:
+                existing = []
+
+            seen: set[str] = set()
+            merged: list[dict] = []
+            for row in existing:
+                q = str(row.get("quote") or row.get("query") or "").strip()
+                if q:
+                    seen.add(q)
+                merged.append(row)
+            for row in (new_items or []):
+                if not isinstance(row, dict):
+                    continue
+                q = str(row.get("quote") or row.get("query") or "").strip()
+                if not q or q in seen:
+                    continue
+                seen.add(q)
+                merged.append(row)
+
+            try:
+                Path(out_json).write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as e:
+                return {"ok": False, "error": f"Failed to write annotations: {type(e).__name__}: {e}"}
+
+            _ANN_JSON = out_json
+            _reset_annotation_state(manual=False)
+            return {"ok": True, "ann": out_json}
 
         # -------- Preview bridge (used by preview.html) --------
         def get_preview_url(self) -> str:
@@ -918,6 +1022,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     pg = _get(pl, 'page_index', 'page_index')
                     rect = _get(pl, 'note_rect', 'note_rect')
                     anchor = _get(pl, 'anchor_rect', 'anchor_rect')
+                    hit_rects = _get(pl, 'hit_rects', 'hit_rects')
                     if uid is None or pg is None or rect is None:
                         continue
                     pg = int(pg)
@@ -932,6 +1037,18 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                             at = _rect_tuple_any(anchor)
                     except Exception:
                         at = None
+                    ht = None
+                    try:
+                        if hit_rects is not None and isinstance(hit_rects, (list, tuple)):
+                            hlist = []
+                            for hr in hit_rects:
+                                rr = _rect_tuple_any(hr)
+                                if rr:
+                                    hlist.append(rr)
+                            if hlist:
+                                ht = hlist
+                    except Exception:
+                        ht = None
                     q = _get(pl, 'query', 'query')
                     exp = _get(pl, 'explanation', 'explanation')
                     # Apply per-note text override if present (used to prefill editor prompt)
@@ -974,6 +1091,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                         'page_index': pg,
                         'note_rect': rt,
                         'anchor_rect': at,
+                        'hit_rects': ht,
                         'query': q,
                         'explanation': exp,
                         'color': col,
@@ -985,7 +1103,12 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     continue
             pages = [{ 'index': i, 'width': w, 'height': h } for i, (w, h) in (globals().get('_PAGE_SIZES') or {}).items()]
             _log("get_preview_meta", {"pages": len(pages), "placements": len(placements), "manual": manual})
-            return { 'pages': pages, 'placements': placements, 'manual': manual }
+            return {
+                'pages': pages,
+                'placements': placements,
+                'manual': manual,
+                'ai_prompt': (globals().get('_LAST_GEMINI_PROMPT') or ''),
+            }
 
         def get_preview_page_count(self):
             pdf_path = _OCR_PDF or _SRC_PDF

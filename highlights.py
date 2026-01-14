@@ -1386,6 +1386,13 @@ def highlight_and_margin_comment_pdf(
                     leader_from=leader_from,
                     leader_to=leader_to,
                 )
+                # For fast web preview highlighting, keep the *actual* matched rect(s)
+                # (not the whole text block). This is best-effort and may not exist
+                # on older placement objects / callers.
+                try:
+                    placement.hit_rects = [_rect_tuple(r)]  # type: ignore[attr-defined]
+                except Exception:
+                    pass
                 placements.append(placement)
                 if emit_callback:
                     try:
