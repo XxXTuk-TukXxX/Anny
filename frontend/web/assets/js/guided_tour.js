@@ -664,12 +664,14 @@
 
   function start(options) {
     var stepIndex = 0;
+    var navigate = true;
     try {
       if (options && options.step !== undefined) stepIndex = clampIndex(options.step);
+      if (options && options.navigate !== undefined) navigate = !!options.navigate;
     } catch (_) {}
     markActive(true);
     setStepIndex(stepIndex);
-    showStep(stepIndex, { navigate: false });
+    showStep(stepIndex, { navigate: navigate });
   }
 
   function stop(markDone) {
