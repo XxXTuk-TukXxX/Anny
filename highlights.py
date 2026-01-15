@@ -1546,7 +1546,7 @@ if __name__ == "__main__":
 
         # Your font
         note_fontname="AnnotateNote",
-        note_fontfile="fonts/Roys-Regular.ttf",
+        note_fontfile="fonts/Arial.ttf",
 
         # Debug (to confirm fallback path)
         # debug=True,
