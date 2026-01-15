@@ -1756,10 +1756,8 @@ def font_maker_index():
 if __name__ == "__main__":
     # Flask dev server for running the app as a web experience.
     #TODO: Fix highlights
-    #TODO: Beta Pop-up
-    #TODO: Arial text font
-    #TODO: Force to do annotations
     #TODO: Fix side bar menu touchscreens
     port = int(os.environ.get("PORT", "5001"))
     debug = str(os.environ.get("FLASK_DEBUG", "")).strip().lower() in ("1", "true", "yes")
     app.run(host="0.0.0.0", port=port, debug=debug)
+

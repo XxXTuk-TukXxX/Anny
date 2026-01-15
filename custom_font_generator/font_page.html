@@ -26,6 +26,7 @@
         },
       }
     </script>
+<script src="/assets/js/guided_tour.js" defer></script>
 </head>
 <body class="bg-background-light dark:bg-background-dark font-display text-[#111418] dark:text-white/90">
 <div class="relative flex h-auto min-h-screen w-full flex-col group/design-root overflow-x-hidden">
@@ -58,7 +59,7 @@ Font maker
 <div class="flex w-full min-w-72 grow flex-col items-start justify-center gap-2 py-6 px-4 @xl:px-8">
 <p class="text-[#111418] dark:text-white text-lg font-bold leading-tight tracking-[-0.015em]">Step 1 – Download the template</p>
 <p class="text-[#617589] dark:text-white/70 text-base font-normal leading-normal mb-4">A brief explanation of why the template is needed and instructions to fill it out clearly.</p>
-<a href="/custom_font_generator/static/handwrite_template.pdf" download class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-primary text-white text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
+<a id="annyDownloadTemplate" href="/custom_font_generator/static/handwrite_template.pdf" download class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-primary text-white text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
 <span class="truncate">Download Template (.pdf)</span>
 </a>
 </div>
@@ -73,12 +74,12 @@ Font maker
                                         Accepts PNG, JPG, or PDF. Tip: Use a clear, high-contrast scan for best results.
                                     </p>
 </div>
-<label for="scan-input" class="flex min-w-[84px] max-w-[320px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-white text-primary border border-primary text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/5 transition-colors">
+<label id="annyChooseScan" for="scan-input" class="flex min-w-[84px] max-w-[320px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-white text-primary border border-primary text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/5 transition-colors">
 <input id="scan-input" name="scan" type="file" accept=".png,.jpg,.jpeg,.pdf" required class="sr-only"/>
 <span class="truncate">Choose a file</span>
 </label>
 <p id="file-name" class="text-sm text-[#617589] dark:text-white/70">No file selected yet</p>
-<button type="submit" class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-primary text-white text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
+<button id="annyGenerateFont" type="submit" class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-6 bg-primary text-white text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
 <span class="truncate">Generate &amp; Preview</span>
 </button>
 </form>
@@ -92,12 +93,20 @@ Font maker
   const sidebar = document.getElementById("workspaceSidebar");
   const SHOW_ZONE_PX = 80;
 
+  function isTourActive() {
+    try {
+      return String(document.cookie || "").indexOf("anny_tour_active_v1=1") >= 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
   document.addEventListener("mousemove", (event) => {
     if (!sidebar) return;
     if (event.clientX <= SHOW_ZONE_PX) {
       sidebar.classList.remove("-translate-x-full");
       sidebar.classList.add("translate-x-0");
-    } else if (!sidebar.matches(":hover")) {
+    } else if (!sidebar.matches(":hover") && !isTourActive()) {
       sidebar.classList.add("-translate-x-full");
       sidebar.classList.remove("translate-x-0");
     }

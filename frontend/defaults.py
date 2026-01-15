@@ -24,7 +24,7 @@ DEFAULTS = {
 
     # Font
     "note_fontname": "AnnotateNote",
-    "note_fontfile": "fonts/Roys-Regular.ttf",
+    "note_fontfile": "fonts/Arial.ttf",
 
     # API
     "gemini_api_key": "",
