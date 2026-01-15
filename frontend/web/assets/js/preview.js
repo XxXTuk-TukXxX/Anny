@@ -1026,7 +1026,8 @@ async function renderFallbackPage(num) {
     overlay.addEventListener('mouseup', handleSecondaryMouse, true);
   }
 
-  function beginDragFromTarget(target, clientX, clientY, pointerId) {
+  const DRAG_START_PX = 7;
+  function beginDragFromTarget(target, clientX, clientY, pointerId, pointerType) {
     if (isFrozen()) return false;
     const t = target && target.closest ? target.closest('[data-uid]') : null;
     if (!t) return false;
@@ -1044,6 +1045,8 @@ async function renderFallbackPage(num) {
       startX: clientX, startY: clientY,
       mode: (onHandle ? 'resize' : 'move'),
       pointerId: (typeof pointerId === 'number' ? pointerId : null),
+      pointerType: (pointerType || 'mouse'),
+      moved: false,
     };
     return true;
   }
@@ -1051,7 +1054,7 @@ async function renderFallbackPage(num) {
   overlay.addEventListener('mousedown', (e) => {
     // If Pointer Events are supported, prefer those for both mouse and touch.
     if (typeof window !== 'undefined' && 'PointerEvent' in window) return;
-    if (beginDragFromTarget(e.target, e.clientX, e.clientY, null)) {
+    if (beginDragFromTarget(e.target, e.clientX, e.clientY, null, 'mouse')) {
       e.preventDefault();
     }
   });
@@ -1059,7 +1062,7 @@ async function renderFallbackPage(num) {
   overlay.addEventListener('pointerdown', (e) => {
     // Touch/pen drag support (and modern mouse drag via Pointer Events).
     if (!e) return;
-    if (beginDragFromTarget(e.target, e.clientX, e.clientY, e.pointerId)) {
+    if (beginDragFromTarget(e.target, e.clientX, e.clientY, e.pointerId, e.pointerType || 'touch')) {
       try { dragState?.el?.setPointerCapture?.(e.pointerId); } catch (_) {}
       e.preventDefault();
     }
@@ -1068,6 +1071,9 @@ async function renderFallbackPage(num) {
   window.addEventListener('mousemove', (e) => {
     if (!dragState) return;
     if (dragState.pointerId !== null) return;
+    const dist = Math.hypot((e.clientX - dragState.startX), (e.clientY - dragState.startY));
+    if (!dragState.moved && dist < DRAG_START_PX) return;
+    dragState.moved = true;
     const { el, sx, sy, startX, startY, x0, y0, x1, y1, mode } = dragState;
     const dx = (e.clientX - startX) / sx;
     const dy = (e.clientY - startY) / sy;
@@ -1091,6 +1097,7 @@ async function renderFallbackPage(num) {
   window.addEventListener('mouseup', async () => {
     if (!dragState) return;
     if (dragState.pointerId !== null) return;
+    if (!dragState.moved) { dragState = null; return; }
     const { uid } = dragState;
     const x0 = parseFloat(dragState.el.getAttribute('data-x0') || '0');
     const y0 = parseFloat(dragState.el.getAttribute('data-y0') || '0');
@@ -1109,6 +1116,9 @@ async function renderFallbackPage(num) {
     if (!dragState) return;
     if (dragState.pointerId === null) return;
     if (e.pointerId !== dragState.pointerId) return;
+    const dist = Math.hypot((e.clientX - dragState.startX), (e.clientY - dragState.startY));
+    if (!dragState.moved && dist < DRAG_START_PX) return;
+    dragState.moved = true;
     const { el, sx, sy, startX, startY, x0, y0, x1, y1, mode } = dragState;
     const dx = (e.clientX - startX) / sx;
     const dy = (e.clientY - startY) / sy;
@@ -1134,6 +1144,18 @@ async function renderFallbackPage(num) {
     if (!dragState) return;
     if (dragState.pointerId === null) return;
     if (e && e.pointerId !== dragState.pointerId) return;
+    // Touch/pen: treat a tap (no drag) as "edit"
+    try { dragState?.el?.releasePointerCapture?.(dragState.pointerId); } catch (_) {}
+    if (!dragState.moved) {
+      const uid = dragState.uid;
+      const pt = (dragState.pointerType || 'mouse');
+      const mode = dragState.mode;
+      dragState = null;
+      if (pt !== 'mouse' && mode !== 'resize' && uid) {
+        try { enterEditMode(uid); } catch (_) {}
+      }
+      return;
+    }
     const { uid } = dragState;
     const x0 = parseFloat(dragState.el.getAttribute('data-x0') || '0');
     const y0 = parseFloat(dragState.el.getAttribute('data-y0') || '0');
