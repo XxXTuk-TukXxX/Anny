@@ -12,6 +12,7 @@
     'border': 'note_border',
     'border-width': 'note_border_width',
     'text-color': 'note_text',
+    'text-markup-style': 'text_markup_style',
     'leader-line-drawing': 'draw_leader',
     'leader-line-color': 'leader_color',
     'scan-limit': 'max_scan',

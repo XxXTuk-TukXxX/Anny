@@ -86,6 +86,15 @@
 </div>
 </div>
 <div class="sm:col-span-2">
+<label class="block text-sm font-medium leading-6 text-gray-900" for="text-markup-style">Text Markup</label>
+<div class="mt-2">
+<select class="form-select block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 focus:ring-2 focus:ring-inset focus:ring-[var(--primary-color)] sm:text-sm sm:leading-6" id="text-markup-style" name="text-markup-style">
+<option value="highlight">Highlight</option>
+<option value="underline">Underline</option>
+</select>
+</div>
+</div>
+<div class="sm:col-span-2">
 <label class="block text-sm font-medium leading-6 text-gray-900" for="leader-line-drawing">Draw Leader Line</label>
 <div class="mt-2 flex items-center gap-3">
   <input class="h-5 w-5 rounded border-gray-300 text-[var(--primary-color)] focus:ring-[var(--primary-color)]" id="leader-line-drawing" name="leader-line-drawing" type="checkbox"/>
@@ -245,6 +254,7 @@ Add manual text box (debug)
     'border': 'note_border',
     'border-width': 'note_border_width',
     'text-color': 'note_text',
+    'text-markup-style': 'text_markup_style',
     'leader-line-drawing': 'draw_leader',
     'leader-line-color': 'leader_color',
     'scan-limit': 'max_scan',

@@ -631,6 +631,49 @@ def _add_highlight(page, quads_or_rects):
         return page.addHighlightAnnot(quads_or_rects)
     raise RuntimeError("This PyMuPDF version lacks highlight annotation API.")
 
+
+def _normalize_text_markup_style(style) -> str:
+    s = str(style or "").strip().lower()
+    return "underline" if s == "underline" else "highlight"
+
+
+def _add_underline(page, quads_or_rects):
+    if hasattr(page, "add_underline_annot"):
+        return page.add_underline_annot(quads_or_rects)
+    if hasattr(page, "addUnderlineAnnot"):
+        return page.addUnderlineAnnot(quads_or_rects)
+    return None
+
+
+def _add_text_markup(page, quads_or_rects, *, style="highlight"):
+    markup_style = _normalize_text_markup_style(style)
+    if markup_style == "underline":
+        return _add_underline(page, quads_or_rects)
+    return _add_highlight(page, quads_or_rects)
+
+
+def _draw_underline_fallback(page, quads_or_rects, *, color: Optional[Color], width: float = 1.2):
+    if color is None:
+        return 0
+    fitz = _import_fitz()
+    items = quads_or_rects if isinstance(quads_or_rects, (list, tuple)) else [quads_or_rects]
+    drawn = 0
+    for item in items:
+        rect = getattr(item, "rect", item)
+        try:
+            y = float(rect.y1) - max(0.4, width * 0.25)
+            _draw_line(
+                page,
+                fitz.Point(float(rect.x0), y),
+                fitz.Point(float(rect.x1), y),
+                color=color,
+                width=width,
+            )
+            drawn += 1
+        except Exception:
+            continue
+    return drawn
+
 # --- SIMPLE fallback wrap (kept as a fallback) -------------------
 def _measure_height(text: str, width: float, fontsize: float):
     avg_char_w = 0.5 * fontsize
@@ -912,6 +955,7 @@ def highlight_and_margin_comment_pdf(
     comments,
     out_path=None,
     highlight_color="yellow",
+    text_markup_style="highlight",
     note_fill="#FFFDE7",
     note_text="black",
     note_border="orange",
@@ -1007,7 +1051,8 @@ def highlight_and_margin_comment_pdf(
         NP = _NP  # type: ignore
 
     # ------------ normalize inputs (JSON-aware) ------------
-    color_map_raw: Dict[str, Optional[str]] = {}
+    text_markup_style = _normalize_text_markup_style(text_markup_style)
+    color_map_raw: Dict[str, Optional[Union[str, Color]]] = {}
 
     if annotations_json is not None:
         items = load_annotations_json(annotations_json)
@@ -1028,8 +1073,9 @@ def highlight_and_margin_comment_pdf(
             comment_map = dict(comments)
             for q in qlist:
                 comment_map.setdefault(q, f"Note: {q}")
+        default_markup_color = note_text if text_markup_style == "underline" else highlight_color
         for q in qlist:
-            color_map_raw[q] = str(highlight_color)
+            color_map_raw[q] = default_markup_color
 
     # flags
     ci_flag = _pick_flag(fitz, ["TEXT_IGNORECASE", "TEXT_IGNORE_CASE"], None)
@@ -1047,9 +1093,9 @@ def highlight_and_margin_comment_pdf(
         qlist = list(comment_map.keys())
 
     # colors
-    default_hi = _parse_color(highlight_color)
     fill_rgb   = _parse_optional_color(note_fill)
     txt_rgb    = _parse_color(note_text)
+    default_hi = txt_rgb if text_markup_style == "underline" else _parse_color(highlight_color)
     brd_rgb    = _parse_optional_color(note_border)
     lead_rgb   = _parse_optional_color(leader_color)
 
@@ -1061,6 +1107,7 @@ def highlight_and_margin_comment_pdf(
         return parsed or default_hi
 
     per_highlight_color: Dict[str, Color] = {q: _resolve_hi(color_map_raw.get(q)) for q in qlist}
+    markup_opacity = 1.0 if text_markup_style == "underline" else 0.25
 
     # Normalize override dicts
     note_text_overrides = note_text_overrides or {}
@@ -1100,8 +1147,11 @@ def highlight_and_margin_comment_pdf(
                 if not quads:
                     continue
                 quads = _dedup_rects(quads)
-                annot = _add_highlight(page, quads)
                 col = per_highlight_color.get(q, default_hi)
+                annot = _add_text_markup(page, quads, style=text_markup_style)
+                if annot is None and text_markup_style == "underline":
+                    _draw_underline_fallback(page, quads, color=col)
+                    continue
                 if hasattr(annot, "set_colors"):
                     try:
                         annot.set_colors(stroke=col)
@@ -1109,7 +1159,7 @@ def highlight_and_margin_comment_pdf(
                         pass
                 if hasattr(annot, "set_opacity"):
                     try:
-                        annot.set_opacity(0.25)
+                        annot.set_opacity(markup_opacity)
                     except Exception:
                         pass
                 if hasattr(annot, "update"):
@@ -1274,15 +1324,19 @@ def highlight_and_margin_comment_pdf(
             if not quads:
                 continue
             quads = _dedup_rects(quads)
-            annot = _add_highlight(page, quads)
             col = per_highlight_color.get(q, default_hi)
+            annot = _add_text_markup(page, quads, style=text_markup_style)
+            if annot is None and text_markup_style == "underline":
+                _draw_underline_fallback(page, quads, color=col)
+                total_hits += len(quads)
+                continue
             if hasattr(annot, "set_colors"):
                 try:
                     annot.set_colors(stroke=col)
                 except TypeError:
                     pass
             if hasattr(annot, "set_opacity"):
-                annot.set_opacity(0.25)
+                annot.set_opacity(markup_opacity)
             if hasattr(annot, "update"):
                 annot.update()
             total_hits += len(quads)

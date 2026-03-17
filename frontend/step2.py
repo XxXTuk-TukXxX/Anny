@@ -122,9 +122,10 @@ class Step2Mixin:
             self.note_border_var = tk.StringVar(value=DEFAULTS["note_border"])
             self.note_border_width_var = tk.IntVar(value=DEFAULTS["note_border_width"])
             self.note_text_var = tk.StringVar(value=DEFAULTS["note_text"])
+            self.text_markup_style_var = tk.StringVar(value=DEFAULTS["text_markup_style"])
             self.draw_leader_var = tk.BooleanVar(value=DEFAULTS["draw_leader"])
             self.leader_color_var = tk.StringVar(value=DEFAULTS["leader_color"])
-    
+
             f3 = ttk.LabelFrame(self.step2, text="Visuals")
             f3.grid(row=row + 2, column=0, columnspan=3, sticky="we", padx=8, pady=8)
             ttk.Label(f3, text="Note fill (empty=None)").grid(row=0, column=0, sticky="e", padx=6, pady=4)
@@ -138,6 +139,14 @@ class Step2Mixin:
             ttk.Checkbutton(f3, text="Draw leader", variable=self.draw_leader_var).grid(row=1, column=2, sticky="w", padx=6)
             ttk.Label(f3, text="Leader color (empty=None)").grid(row=1, column=3, sticky="e")
             ttk.Entry(f3, textvariable=self.leader_color_var, width=14).grid(row=1, column=4, sticky="w")
+            ttk.Label(f3, text="Text markup").grid(row=2, column=0, sticky="e", padx=6, pady=4)
+            ttk.Combobox(
+                f3,
+                textvariable=self.text_markup_style_var,
+                values=["highlight", "underline"],
+                width=14,
+                state="readonly",
+            ).grid(row=2, column=1, sticky="w")
     
             bar = ttk.Frame(self.step2)
             bar.grid(row=row + 3, column=0, columnspan=3, sticky="e", padx=12, pady=12)
@@ -259,6 +268,7 @@ class Step2Mixin:
                 note_border=none_if_empty(self.note_border_var.get()),
                 note_border_width=int(self.note_border_width_var.get()),
                 note_text=self.note_text_var.get().strip() or "red",
+                text_markup_style=self.text_markup_style_var.get().strip() or DEFAULTS.get("text_markup_style", "highlight"),
                 draw_leader=bool(self.draw_leader_var.get()),
                 leader_color=none_if_empty(self.leader_color_var.get()),
                 allow_column_footer=bool(self.col_footer_var.get()),
