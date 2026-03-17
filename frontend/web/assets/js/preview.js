@@ -708,9 +708,10 @@ async function renderFallbackPage(num) {
     const meta = await getPreviewMeta();
     if (meta && typeof meta === 'object') {
       meta.manual = !!meta.manual;
+      meta.text_markup_style = String(meta.text_markup_style || '').trim().toLowerCase() === 'underline' ? 'underline' : 'highlight';
       overlayMeta = meta;
     } else {
-      overlayMeta = { pages: [], placements: [], manual: false };
+      overlayMeta = { pages: [], placements: [], manual: false, text_markup_style: 'highlight' };
     }
     dbg('overlayMeta loaded', overlayMeta);
   }
@@ -718,6 +719,10 @@ async function renderFallbackPage(num) {
   function px(n) { return Math.round(n) + 'px'; }
   function isFrozen() { const cb = document.getElementById('freezeToggle'); return !!(cb && cb.checked); }
   function clampNonNeg(n) { return isFinite(n) && n > 0 ? n : 0; }
+  function getTextMarkupStyle() {
+    const raw = String(overlayMeta?.text_markup_style || viewerSettings?.text_markup_style || '').trim().toLowerCase();
+    return raw === 'underline' ? 'underline' : 'highlight';
+  }
 
   function wrapTextLines(text, maxWidthPx, ctx2d, tightness) {
     const t = (text || '').toString();
@@ -800,10 +805,10 @@ async function renderFallbackPage(num) {
     overlay.dataset.pageHeight = String(pageInfo?.height || canvasH);
     const placements = (overlayMeta.placements || []).filter(p => p.page_index === pageIndex);
 
-    // Highlight overlay (fast preview): show where the note refers to.
+    // Text markup overlay (fast preview): show where the note refers to.
     // Prefer precise hit rectangles (if available), else fall back to the
-    // placement's anchor_rect (block around the hit). Match baked PDF highlight
-    // opacity (0.25) from `highlights.py`.
+    // placement's anchor_rect (block around the hit).
+    const textMarkupStyle = getTextMarkupStyle();
     for (const p of placements) {
       try {
         const rects = (Array.isArray(p.hit_rects) && p.hit_rects.length)
@@ -818,12 +823,21 @@ async function renderFallbackPage(num) {
           const hl = document.createElement('div');
           hl.className = 'absolute';
           hl.style.left = px(ax0 * scaleX);
-          hl.style.top = px(ay0 * scaleY);
           hl.style.width = px(aw);
-          hl.style.height = px(ah);
-          hl.style.backgroundColor = col;
-          hl.style.opacity = '0.25';
           hl.style.pointerEvents = 'none';
+          if (textMarkupStyle === 'underline') {
+            const thickness = Math.max(2, Math.min(4, Math.round(scaleY * 1.5)));
+            hl.style.top = px(Math.max(0, (ay1 * scaleY) - thickness));
+            hl.style.height = px(thickness);
+            hl.style.backgroundColor = col;
+            hl.style.borderRadius = '999px';
+            hl.style.opacity = '1';
+          } else {
+            hl.style.top = px(ay0 * scaleY);
+            hl.style.height = px(ah);
+            hl.style.backgroundColor = col;
+            hl.style.opacity = '0.25';
+          }
           overlay.appendChild(hl);
         }
       } catch (_) {}

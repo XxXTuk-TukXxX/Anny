@@ -9,6 +9,7 @@ DEFAULTS = {
     "note_border": "",
     "note_border_width": 0,
     "note_text": "red",
+    "text_markup_style": "highlight",
     "draw_leader": False,
     "leader_color": "",
 

@@ -328,6 +328,7 @@ def _build_preview_data_url() -> str:
                     note_border=_none_if_empty(settings.get("note_border")),
                     note_border_width=int(settings.get("note_border_width", 0)),
                     note_text=settings.get("note_text", "red"),
+                    text_markup_style=str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))),
                     draw_leader=bool(settings.get("draw_leader", False)),
                     leader_color=_none_if_empty(settings.get("leader_color")),
                     allow_column_footer=bool(settings.get("allow_column_footer", True)),
@@ -424,6 +425,7 @@ def _build_preview_data_url() -> str:
             note_border=_none_if_empty(settings.get("note_border")),
             note_border_width=int(settings.get("note_border_width", 0)),
             note_text=settings.get("note_text", "red"),
+            text_markup_style=str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))),
             draw_leader=bool(settings.get("draw_leader", False)),
             leader_color=_none_if_empty(settings.get("leader_color")),
             allow_column_footer=bool(settings.get("allow_column_footer", True)),
@@ -686,6 +688,7 @@ def api_export_pdf():
             note_border=_none_if_empty(settings.get("note_border")),
             note_border_width=int(settings.get("note_border_width", 0)),
             note_text=settings.get("note_text", "red"),
+            text_markup_style=str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))),
             draw_leader=bool(settings.get("draw_leader", False)),
             leader_color=_none_if_empty(settings.get("leader_color")),
             allow_column_footer=bool(settings.get("allow_column_footer", True)),
@@ -759,6 +762,7 @@ def _preview_meta() -> dict:
                     note_border=_none_if_empty(settings.get("note_border")),
                     note_border_width=int(settings.get("note_border_width", 0)),
                     note_text=settings.get("note_text", "red"),
+                    text_markup_style=str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))),
                     draw_leader=bool(settings.get("draw_leader", False)),
                     leader_color=_none_if_empty(settings.get("leader_color")),
                     allow_column_footer=bool(settings.get("allow_column_footer", True)),
@@ -795,7 +799,10 @@ def _preview_meta() -> dict:
     color_overrides = state._NOTE_COLOR_OVERRIDES or {}
     text_overrides = state._NOTE_TEXT_OVERRIDES or {}
     default_note_text = str(settings.get("note_text") or "red").strip() or "red"
-    default_highlight = "yellow"
+    text_markup_style = str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))).strip().lower()
+    if text_markup_style not in ("highlight", "underline"):
+        text_markup_style = "highlight"
+    default_highlight = default_note_text if text_markup_style == "underline" else "yellow"
     placements = []
     pls = state._PLACEMENTS or []
     fixed = state._FIXED_OVERRIDES
@@ -913,6 +920,7 @@ def _preview_meta() -> dict:
         "pages": pages,
         "placements": placements,
         "manual": manual,
+        "text_markup_style": text_markup_style,
         "ai_prompt": (getattr(state, "_LAST_GEMINI_PROMPT", "") or ""),
     }
 
@@ -1760,4 +1768,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5001"))
     debug = str(os.environ.get("FLASK_DEBUG", "")).strip().lower() in ("1", "true", "yes")
     app.run(host="0.0.0.0", port=port, debug=debug)
-

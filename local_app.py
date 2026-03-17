@@ -783,6 +783,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                             note_border=_none_if_empty(settings.get("note_border")),
                             note_border_width=int(settings.get("note_border_width", 0)),
                             note_text=settings.get("note_text", "red"),
+                            text_markup_style=str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))),
                             draw_leader=bool(settings.get("draw_leader", False)),
                             leader_color=_none_if_empty(settings.get("leader_color")),
                             allow_column_footer=bool(settings.get("allow_column_footer", True)),
@@ -876,6 +877,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     note_border=_none_if_empty(settings.get("note_border")),
                     note_border_width=int(settings.get("note_border_width", 0)),
                     note_text=settings.get("note_text", "red"),
+                    text_markup_style=str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))),
                     draw_leader=bool(settings.get("draw_leader", False)),
                     leader_color=_none_if_empty(settings.get("leader_color")),
                     allow_column_footer=bool(settings.get("allow_column_footer", True)),
@@ -949,6 +951,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                             note_border=None if not settings.get("note_border") else settings.get("note_border"),
                             note_border_width=int(settings.get("note_border_width", 0)),
                             note_text=settings.get("note_text", "red"),
+                            text_markup_style=str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))),
                             draw_leader=bool(settings.get("draw_leader", False)),
                             leader_color=None if not settings.get("leader_color") else settings.get("leader_color"),
                             allow_column_footer=bool(settings.get("allow_column_footer", True)),
@@ -986,7 +989,10 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
             rotation_overrides = globals().get('_ROTATION_OVERRIDES') or {}
             default_fontsize = float(settings.get("note_fontsize", 9.0))
             default_note_text = str(settings.get("note_text") or "red").strip() or "red"
-            default_highlight = "yellow"
+            text_markup_style = str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))).strip().lower()
+            if text_markup_style not in ("highlight", "underline"):
+                text_markup_style = "highlight"
+            default_highlight = default_note_text if text_markup_style == "underline" else "yellow"
 
             placements = []
             pls = globals().get('_PLACEMENTS') or []
@@ -1107,6 +1113,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                 'pages': pages,
                 'placements': placements,
                 'manual': manual,
+                'text_markup_style': text_markup_style,
                 'ai_prompt': (globals().get('_LAST_GEMINI_PROMPT') or ''),
             }
 
@@ -1453,6 +1460,7 @@ def _start_webview_flow() -> tuple[Optional[str], Optional[str]]:
                     note_border=None if not settings.get("note_border") else settings.get("note_border"),
                     note_border_width=int(settings.get("note_border_width", 0)),
                     note_text=settings.get("note_text", "red"),
+                    text_markup_style=str(settings.get("text_markup_style", DEFAULTS.get("text_markup_style", "highlight"))),
                     draw_leader=bool(settings.get("draw_leader", False)),
                     leader_color=None if not settings.get("leader_color") else settings.get("leader_color"),
                     allow_column_footer=bool(settings.get("allow_column_footer", True)),
